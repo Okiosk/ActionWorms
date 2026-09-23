@@ -69,11 +69,62 @@ export class Projectile {
     // Gravity
     this.vy += CONFIG.GRAVITY * this.weapon.gravityScale;
 
+    // Homing Missile Tracking
+    if (this.weapon.homing && this.armed) {
+      let closestWorm: any = null;
+      let closestDist = 320;
+      for (const w of worms) {
+        if (w.id !== this.ownerId && w.isAlive()) {
+          const d = Math.hypot(w.x - this.x, w.y - this.y);
+          if (d < closestDist) {
+            closestDist = d;
+            closestWorm = w;
+          }
+        }
+      }
+      if (closestWorm) {
+        const targetAngle = Math.atan2(closestWorm.y - this.y, closestWorm.x - this.x);
+        const curAngle = Math.atan2(this.vy, this.vx);
+        let diff = targetAngle - curAngle;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        const turnSpeed = 0.11;
+        const newAngle = curAngle + Math.max(-turnSpeed, Math.min(turnSpeed, diff));
+        const curSpeed = Math.hypot(this.vx, this.vy);
+        this.vx = Math.cos(newAngle) * curSpeed;
+        this.vy = Math.sin(newAngle) * curSpeed;
+      }
+    }
+
+    // Vortex Gravitational Pull
+    if (this.weapon.vortex) {
+      for (const w of worms) {
+        if (w.isAlive()) {
+          const dx = this.x - w.x;
+          const dy = this.y - w.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist > 1 && dist < 120) {
+            const pull = (1 - dist / 120) * 0.75;
+            w.takeDamage(0, (dx / dist) * pull, (dy / dist) * pull, this.ownerId);
+          }
+        }
+      }
+    }
+
     // Tail particle FX
-    if (this.weapon.id === 'bazooka') {
+    if (this.weapon.id === 'bazooka' || this.weapon.id === 'homing_missile') {
       particles.spawn(this.x, this.y, -this.vx * 0.2, -this.vy * 0.2, 'smoke', undefined, 2.5, 30);
+      if (this.weapon.id === 'homing_missile') {
+        particles.spawn(this.x, this.y, (Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5, 'fire', undefined, 2, 15);
+      }
     } else if (this.weapon.id === 'flamer') {
       particles.spawn(this.x, this.y, (Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5, 'fire', undefined, 3, 25);
+    } else if (this.weapon.id === 'railgun') {
+      particles.spawn(this.x, this.y, 0, 0, 'spark', '#22e8dd', 2.0, 15);
+    } else if (this.weapon.id === 'bouncy_ball') {
+      particles.spawn(this.x, this.y, -this.vx * 0.1, -this.vy * 0.1, 'spark', '#b844ff', 1.8, 12);
+    } else if (this.weapon.id === 'vortex') {
+      particles.spawn(this.x, this.y, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2, 'smoke', '#8822cc', 3.0, 20);
     }
 
     // Proximity mine trigger
@@ -106,6 +157,9 @@ export class Projectile {
           // Direct hit!
           this.x = nextX;
           this.y = nextY;
+          if (this.weapon.toxic) {
+            particles.spawnBloodBurst(this.x, this.y, 20);
+          }
           this.detonate(terrain, particles, worms, onDetonate);
           return;
         }
@@ -113,7 +167,7 @@ export class Projectile {
 
       // Check collision with terrain
       if (terrain.isSolid(nextX, nextY)) {
-        // Piercing laser / Gauss gun behavior
+        // Piercing laser / Gauss gun / Railgun behavior
         if (this.weapon.piercing) {
           terrain.carveCircle(nextX, nextY, this.weapon.craterRadius);
           this.x = nextX;
@@ -121,16 +175,21 @@ export class Projectile {
           continue;
         }
 
-        // Bouncing logic (grenades, cluster bombs, mines)
+        // Bouncing logic (grenades, cluster bombs, mines, bouncy ball)
         if (this.bouncesLeft > 0) {
           this.bouncesLeft--;
-          sound.playGrenadeBounce();
+          if (this.weapon.id === 'bouncy_ball') {
+            sound.playBouncy();
+          } else {
+            sound.playGrenadeBounce();
+          }
 
           // Reflect velocity against surface normal
           const normal = this.findNormal(terrain, this.x, this.y);
           const dot = this.vx * normal.nx + this.vy * normal.ny;
-          this.vx = (this.vx - 2 * dot * normal.nx) * 0.58;
-          this.vy = (this.vy - 2 * dot * normal.ny) * 0.58;
+          const restitution = this.weapon.id === 'bouncy_ball' ? 0.95 : 0.58;
+          this.vx = (this.vx - 2 * dot * normal.nx) * restitution;
+          this.vy = (this.vy - 2 * dot * normal.ny) * restitution;
           break;
         } else {
           // Explode on terrain contact
@@ -244,6 +303,55 @@ export class Projectile {
       ctx.beginPath();
       ctx.moveTo(this.x - this.vx * 0.8, this.y - this.vy * 0.8);
       ctx.lineTo(this.x, this.y);
+      ctx.stroke();
+    } else if (this.weapon.id === 'homing_missile') {
+      const angle = Math.atan2(this.vy, this.vx);
+      ctx.translate(this.x, this.y);
+      ctx.rotate(angle);
+      // Homing missile body
+      ctx.fillStyle = '#225588';
+      ctx.fillRect(-6, -2.5, 9, 5);
+      // Nose cone
+      ctx.fillStyle = '#ffcc00';
+      ctx.beginPath();
+      ctx.moveTo(3, -2.5);
+      ctx.lineTo(7, 0);
+      ctx.lineTo(3, 2.5);
+      ctx.fill();
+    } else if (this.weapon.id === 'railgun') {
+      ctx.strokeStyle = '#22e8dd';
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      ctx.moveTo(this.x - this.vx * 0.9, this.y - this.vy * 0.9);
+      ctx.lineTo(this.x, this.y);
+      ctx.stroke();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    } else if (this.weapon.id === 'bouncy_ball') {
+      ctx.fillStyle = '#b844ff';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    } else if (this.weapon.id === 'dart_gun') {
+      const angle = Math.atan2(this.vy, this.vx);
+      ctx.translate(this.x, this.y);
+      ctx.rotate(angle);
+      ctx.fillStyle = '#44ff66';
+      ctx.fillRect(-4, -1, 8, 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(4, -0.5, 2, 1);
+    } else if (this.weapon.id === 'vortex') {
+      // Swirling singularity
+      ctx.fillStyle = '#110022';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#b844ff';
+      ctx.lineWidth = 2;
       ctx.stroke();
     } else if (this.weapon.id === 'flamer') {
       ctx.fillStyle = '#ff6600';

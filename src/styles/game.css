@@ -628,3 +628,256 @@ body, html {
   color: var(--accent-red);
   text-shadow: 0 0 20px rgba(255, 51, 68, 0.8);
 }
+
+/* Player Name Row in Main Menu */
+.player-name-row {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.player-name-row label {
+  font-size: 19px;
+  color: var(--accent-gold);
+}
+
+.player-name-row input {
+  background: #140d08;
+  border: 1px solid #6b4025;
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-family: 'VT323', monospace;
+  font-size: 22px;
+  color: #fff;
+  outline: none;
+}
+
+.player-name-row input:focus {
+  border-color: var(--accent-gold);
+  box-shadow: 0 0 8px rgba(255, 184, 51, 0.3);
+}
+
+/* Host Lobby Card & Sections */
+.host-lobby-card {
+  max-width: 680px;
+  max-height: 92vh;
+  overflow-y: auto;
+  gap: 14px;
+}
+
+.lobby-section {
+  width: 100%;
+  background: rgba(14, 9, 6, 0.7);
+  border: 1px solid #3d2415;
+  border-radius: 6px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.section-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 11px;
+  color: var(--accent-gold);
+  margin-bottom: 4px;
+}
+
+/* Connected Players Grid */
+.players-list {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  width: 100%;
+}
+
+.player-slot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #1d120a;
+  border: 1px solid #4a2916;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 18px;
+}
+
+.player-slot.active {
+  border-color: #6d3f22;
+  color: #fff;
+}
+
+.player-slot.empty {
+  border-style: dashed;
+  border-color: #331e12;
+  color: #665544;
+}
+
+.player-color-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  display: inline-block;
+  box-shadow: 0 0 5px rgba(0, 0, 0, 0.6);
+}
+
+.player-color-dot.empty {
+  background: #2a180e !important;
+  border: 1px dashed #55331e;
+}
+
+/* Modifiers Grid */
+.modifiers-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  width: 100%;
+}
+
+.mod-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mod-item label {
+  font-size: 17px;
+  color: var(--text-muted);
+}
+
+.mod-item select {
+  background: #140d08;
+  border: 1px solid #5a351f;
+  border-radius: 4px;
+  padding: 6px 8px;
+  color: #ffeedd;
+  font-family: 'VT323', monospace;
+  font-size: 18px;
+  outline: none;
+  cursor: pointer;
+}
+
+.mod-item select:focus {
+  border-color: var(--accent-gold);
+}
+
+/* Modifiers Summary in Client Lobby */
+.modifiers-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+}
+
+.mod-summary-pill {
+  background: #1d120b;
+  border: 1px solid #4d2b17;
+  border-radius: 12px;
+  padding: 4px 10px;
+  font-size: 16px;
+  color: #eeddcc;
+}
+
+.mod-summary-pill b {
+  color: var(--accent-gold);
+}
+
+/* Multi-Player HUD Scoreboard (Right Side) */
+.hud-scoreboard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(14, 9, 6, 0.85);
+  border: 1px solid #402313;
+  border-radius: 6px;
+  padding: 6px 10px;
+  min-width: 220px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.scoreboard-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+}
+
+.score-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.score-name {
+  color: #f0ece6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 75px;
+  font-weight: 600;
+}
+
+.score-bar-bg {
+  width: 50px;
+  height: 6px;
+  background: #2a150b;
+  border-radius: 3px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.score-bar-fill {
+  height: 100%;
+  background: #3cd070;
+  transition: width 0.15s ease-out;
+}
+
+.score-bar-fill.warning {
+  background: #ffaa22;
+}
+
+.score-bar-fill.critical {
+  background: #ff3344;
+}
+
+.score-hp {
+  font-family: monospace;
+  font-size: 13px;
+  color: #a89a8c;
+  min-width: 24px;
+  text-align: right;
+}
+
+.score-frags {
+  font-family: 'VT323', monospace;
+  font-size: 15px;
+  color: var(--accent-gold);
+  min-width: 32px;
+  text-align: right;
+}
+
+.hud-player-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 2px;
+  flex-shrink: 0;
+}
+
+.hud-rule-badge {
+  font-size: 13px;
+  color: var(--accent-gold);
+  font-family: 'Press Start 2P', monospace;
+  background: rgba(22, 13, 8, 0.85);
+  border: 1px solid #5a3219;
+  border-radius: 10px;
+  padding: 3px 8px;
+  margin-bottom: 4px;
+  text-align: center;
+}
+

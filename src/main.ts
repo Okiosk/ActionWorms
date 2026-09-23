@@ -18,8 +18,7 @@ window.addEventListener('DOMContentLoaded', () => {
   (window as any).game = game;
   (window as any).net = net;
 
-  let currentP1Loadout: WeaponId[] = [...DEFAULT_LOADOUT];
-  let currentP2Loadout: WeaponId[] = [...DEFAULT_LOADOUT];
+  let currentLoadout: WeaponId[] = [...DEFAULT_LOADOUT];
 
   // Mouse aim coordinates
   let mouseCanvasX = 0;
@@ -89,64 +88,40 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!game.isRunning || game.worms.length === 0) return;
 
     const localWorm = game.getLocalWorm();
-    const isP2Mode = game.mode === 'local2p';
 
-    // Player 1 Mouse Aim Angle relative to local worm
+    // Mouse Aim Angle relative to local worm
     let p1AimAngle: number | undefined = undefined;
     if (localWorm && localWorm.isAlive()) {
       p1AimAngle = Math.atan2(mouseCanvasY - localWorm.y, mouseCanvasX - localWorm.x);
     }
 
-    // Player 1 Input (Q/D/Z/S or A/D/W/S + Mouse / Keyboard)
+    // Local Player Input (WASD / ZQSD / Arrow keys + Mouse)
     game.localP1Input = {
-      left: !!(keys['KeyA'] || keys['KeyQ'] || (!isP2Mode && keys['ArrowLeft'])),
-      right: !!(keys['KeyD'] || (!isP2Mode && keys['ArrowRight'])),
-      up: !!(keys['KeyW'] || keys['KeyZ'] || (!isP2Mode && keys['ArrowUp'])),
-      down: !!(keys['KeyS'] || (!isP2Mode && keys['ArrowDown'])),
-      jump: !!(keys['KeyW'] || keys['KeyZ'] || keys['Space'] || (!isP2Mode && keys['ArrowUp'])),
-      fire: isMouseDownLeft || !!keys['Space'] || !!keys['KeyF'] || (!isP2Mode && keys['Enter']),
-      rope: isMouseDownRight || !!keys['KeyE'] || !!keys['ShiftLeft'],
+      left: !!(keys['KeyA'] || keys['KeyQ'] || keys['ArrowLeft']),
+      right: !!(keys['KeyD'] || keys['ArrowRight']),
+      up: !!(keys['KeyW'] || keys['KeyZ'] || keys['ArrowUp']),
+      down: !!(keys['KeyS'] || keys['ArrowDown']),
+      jump: !!(keys['KeyW'] || keys['KeyZ'] || keys['Space'] || keys['ArrowUp']),
+      fire: isMouseDownLeft || !!keys['KeyF'] || !!keys['Enter'],
+      rope: isMouseDownRight || !!keys['KeyE'] || !!keys['ShiftLeft'] || !!keys['ShiftRight'],
       weaponSlot: game.localP1Input.weaponSlot,
       aimAngle: p1AimAngle
     };
-
-    // Player 2 Input (For Local 2P couch play)
-    if (isP2Mode) {
-      game.localP2Input = {
-        left: !!keys['ArrowLeft'],
-        right: !!keys['ArrowRight'],
-        up: !!keys['ArrowUp'] || !!keys['Numpad8'] || !!keys['KeyI'],
-        down: !!keys['ArrowDown'] || !!keys['Numpad2'] || !!keys['KeyK'],
-        jump: !!keys['ArrowUp'] || !!keys['Numpad5'],
-        fire: !!keys['Enter'] || !!keys['NumpadEnter'] || !!keys['KeyP'],
-        rope: !!keys['Numpad0'] || !!keys['ShiftRight'] || !!keys['KeyO'],
-        weaponSlot: keys['Numpad1'] ? 0 : keys['Numpad2'] ? 1 : keys['Numpad3'] ? 2 : undefined
-      };
-    }
   }
 
   // Setup Lobby UI
   const lobby = new LobbyUI(menuContainer, {
-    onStartSolo: (loadout) => {
-      currentP1Loadout = loadout;
-      game.initMatch('singleplayer', loadout, [...DEFAULT_LOADOUT]);
-    },
-    onStartLocal2P: (p1Loadout, p2Loadout) => {
-      currentP1Loadout = p1Loadout;
-      currentP2Loadout = p2Loadout;
-      game.initMatch('local2p', p1Loadout, p2Loadout);
-    },
-    onHostOnline: async (loadout) => {
-      currentP1Loadout = loadout;
+    onHostOnline: async (name, loadout, modifiers) => {
+      currentLoadout = loadout;
       const roomId = await net.hostRoom();
-      game.initMatch('online_host', loadout);
+      game.initMatch('online_host', loadout, name, modifiers);
       return roomId;
     },
-    onJoinOnline: async (rawRoomId, loadout) => {
+    onJoinOnline: async (rawRoomId, name, loadout) => {
       const roomId = normalizeRoomId(rawRoomId);
-      currentP1Loadout = loadout;
+      currentLoadout = loadout;
       await net.joinRoom(roomId);
-      game.initMatch('online_client', loadout);
+      game.initMatch('online_client', loadout, name);
 
       // Return a Promise that resolves when WELCOME is received from Host
       return new Promise<void>((resolve, reject) => {
@@ -168,7 +143,7 @@ window.addEventListener('DOMContentLoaded', () => {
           if (!welcomeReceived && net.isConnected) {
             net.broadcast({
               type: 'JOIN',
-              name: 'Invité',
+              name,
               loadout
             });
             setTimeout(sendJoin, 300);
@@ -177,8 +152,16 @@ window.addEventListener('DOMContentLoaded', () => {
         sendJoin();
       });
     },
+    onStartMatch: () => {
+      game.startHostMatch();
+    },
+    onModifierChanged: (mods) => {
+      game.setModifiers(mods);
+    },
     onRematch: () => {
-      game.initMatch(game.mode, currentP1Loadout, currentP2Loadout);
+      if (game.mode === 'online_host') {
+        game.startHostMatch();
+      }
     },
     onReturnToMenu: () => {
       game.isRunning = false;
@@ -187,8 +170,12 @@ window.addEventListener('DOMContentLoaded', () => {
   });
 
   // Callbacks from Game Engine & Network
-  net.onPeerJoined = (peerId) => {
-    lobby.notifyPeerJoined(peerId);
+  game.onLobbyUpdate = (players, modifiers) => {
+    lobby.updateLobbyState(players, modifiers);
+  };
+
+  game.onStartMatchReceived = (_modifiers) => {
+    lobby.hide();
   };
 
   game.onKillFeed = (killer, victim) => {
@@ -196,7 +183,7 @@ window.addEventListener('DOMContentLoaded', () => {
   };
 
   game.onMatchEnd = (winner) => {
-    const isP1Winner = winner.id === 'p1' || winner.id === net.myPeerId;
+    const isP1Winner = winner.id === net.myPeerId;
     lobby.showGameOverModal(winner.name, isP1Winner);
   };
 
@@ -209,7 +196,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Unthrottled 60Hz physics and network ticker (runs in dedicated Web Worker, preventing background tab suspension)
+  // Unthrottled 60Hz physics and network ticker
   const ticker = new GameTicker(() => {
     if (game.isRunning) {
       processLocalInputs();
@@ -218,7 +205,7 @@ window.addEventListener('DOMContentLoaded', () => {
   });
   ticker.start();
 
-  // Rendering loop (vsync tied to display refresh rate)
+  // Rendering loop
   function renderLoop() {
     if (game.isRunning) {
       game.render();

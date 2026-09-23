@@ -3,14 +3,21 @@ import { Terrain } from './Terrain';
 import { Worm, WormInput } from './Worm';
 import { Projectile } from './Projectile';
 import { ParticleManager } from './Particles';
-import { AIController } from './AI';
 import { WeaponDef, WeaponId } from '../weapons/WeaponDef';
 import { WEAPON_REGISTRY, DEFAULT_LOADOUT } from '../weapons/WeaponRegistry';
 import { NetworkManager } from '../net/NetworkManager';
-import { NetEvent, NetMessage, WormNetState, ProjectileNetState } from '../net/Protocol';
+import {
+  NetEvent,
+  NetMessage,
+  WormNetState,
+  ProjectileNetState,
+  MatchModifiers,
+  DEFAULT_MODIFIERS,
+  LobbyPlayerInfo
+} from '../net/Protocol';
 import { sound } from './SoundEffects';
 
-export type GameMode = 'singleplayer' | 'local2p' | 'online_host' | 'online_client';
+export type GameMode = 'online_host' | 'online_client';
 
 export class Game {
   public canvas: HTMLCanvasElement;
@@ -18,16 +25,19 @@ export class Game {
   public terrain: Terrain;
   public particles: ParticleManager;
   public worms: Worm[] = [];
-  public aiControllers: Map<string, AIController> = new Map();
   public projectiles: Projectile[] = [];
   public nextProjectileId: number = 1;
 
-  public mode: GameMode = 'singleplayer';
+  public mode: GameMode = 'online_host';
   public net: NetworkManager;
   public mapSeed: number = 123456;
   public fragLimit: number = CONFIG.DEFAULT_FRAG_LIMIT;
+  public modifiers: MatchModifiers = { ...DEFAULT_MODIFIERS };
   public matchWinner: Worm | null = null;
   public isRunning: boolean = false;
+
+  // Lobby tracking for up to 8 players
+  public lobbyPlayers: Map<string, LobbyPlayerInfo> = new Map();
 
   // Screen shake
   public shakeDuration: number = 0;
@@ -35,18 +45,18 @@ export class Game {
 
   // Local inputs
   public localP1Input: WormInput = { left: false, right: false, up: false, down: false, jump: false, fire: false, rope: false };
-  public localP2Input: WormInput = { left: false, right: false, up: false, down: false, jump: false, fire: false, rope: false };
   public remoteInputs: Map<string, WormInput> = new Map();
 
   // Network event queue (for Host to send to clients)
   private pendingNetEvents: NetEvent[] = [];
   private netSeq: number = 0;
-  private clientInputTimer: number = 0;
 
   // Callbacks for UI updates
   public onMatchEnd?: (winner: Worm) => void;
   public onKillFeed?: (killer: string, victim: string) => void;
   public onWelcomeReceived?: () => void;
+  public onLobbyUpdate?: (players: LobbyPlayerInfo[], modifiers: MatchModifiers) => void;
+  public onStartMatchReceived?: (modifiers: MatchModifiers) => void;
 
   constructor(canvas: HTMLCanvasElement, net: NetworkManager) {
     this.canvas = canvas;
@@ -75,44 +85,105 @@ export class Game {
     if (this.mode === 'online_client') {
       return this.worms.find(w => w.id === this.net.myPeerId) || this.worms[0];
     }
-    return this.worms[0];
+    return this.worms.find(w => w.id === this.net.myPeerId) || this.worms[0];
+  }
+
+  public getLobbyPlayers(): LobbyPlayerInfo[] {
+    return Array.from(this.lobbyPlayers.values());
+  }
+
+  public setModifiers(newMods: Partial<MatchModifiers>) {
+    this.modifiers = { ...this.modifiers, ...newMods };
+    this.fragLimit = this.modifiers.fragLimit;
+    for (const w of this.worms) {
+      w.applyModifiers(this.modifiers);
+    }
+    if (this.mode === 'online_host') {
+      this.broadcastLobbyUpdate();
+    }
+  }
+
+  public broadcastLobbyUpdate() {
+    if (this.mode !== 'online_host') return;
+    const players = this.getLobbyPlayers();
+    this.net.broadcast({
+      type: 'LOBBY_UPDATE',
+      players,
+      modifiers: this.modifiers
+    });
+    this.onLobbyUpdate?.(players, this.modifiers);
   }
 
   private setupNetworkCallbacks() {
     this.net.onMessageReceived = (msg: NetMessage, fromId: string) => {
       if (this.mode === 'online_host') {
         if (msg.type === 'INPUT') {
-          // If player was not yet added to host's worms, auto-register immediately
-          if (!this.worms.some(w => w.id === fromId)) {
+          // Auto-register if not yet in worms
+          if (!this.worms.some(w => w.id === fromId) && this.worms.length < CONFIG.MAX_PLAYERS) {
             this.addNetworkPlayer(fromId, 'Invité', DEFAULT_LOADOUT);
-            this.net.sendTo(fromId, {
-              type: 'WELCOME',
-              playerId: fromId,
-              mapSeed: this.mapSeed,
-              mapWidth: CONFIG.MAP_WIDTH,
-              mapHeight: CONFIG.MAP_HEIGHT,
-              fragLimit: this.fragLimit
-            });
           }
           this.remoteInputs.set(fromId, msg.input);
         } else if (msg.type === 'JOIN') {
-          this.addNetworkPlayer(fromId, msg.name, msg.loadout);
+          if (this.lobbyPlayers.size < CONFIG.MAX_PLAYERS) {
+            const playerIndex = this.lobbyPlayers.size;
+            const color = CONFIG.PLAYER_COLORS[playerIndex % CONFIG.PLAYER_COLORS.length];
+            this.lobbyPlayers.set(fromId, {
+              id: fromId,
+              name: msg.name || `Invité ${playerIndex + 1}`,
+              color,
+              isHost: false,
+              loadout: msg.loadout || DEFAULT_LOADOUT
+            });
+            this.addNetworkPlayer(fromId, msg.name, msg.loadout);
+          }
+
           this.net.sendTo(fromId, {
             type: 'WELCOME',
             playerId: fromId,
             mapSeed: this.mapSeed,
             mapWidth: CONFIG.MAP_WIDTH,
             mapHeight: CONFIG.MAP_HEIGHT,
-            fragLimit: this.fragLimit
+            modifiers: this.modifiers,
+            players: this.getLobbyPlayers()
           });
+
+          this.broadcastLobbyUpdate();
+        } else if (msg.type === 'SET_MODIFIERS') {
+          this.setModifiers(msg.modifiers);
         }
       } else if (this.mode === 'online_client') {
         if (msg.type === 'WELCOME') {
+          this.modifiers = msg.modifiers;
+          this.fragLimit = msg.modifiers.fragLimit;
           if (this.mapSeed !== msg.mapSeed) {
             this.mapSeed = msg.mapSeed;
             this.terrain.generateMap(msg.mapSeed);
           }
           this.onWelcomeReceived?.();
+          this.onLobbyUpdate?.(msg.players, msg.modifiers);
+        } else if (msg.type === 'LOBBY_UPDATE') {
+          this.modifiers = msg.modifiers;
+          this.fragLimit = msg.modifiers.fragLimit;
+          this.onLobbyUpdate?.(msg.players, msg.modifiers);
+        } else if (msg.type === 'START_MATCH') {
+          this.mapSeed = msg.mapSeed;
+          this.terrain.generateMap(msg.mapSeed);
+          this.modifiers = msg.modifiers;
+          this.fragLimit = msg.modifiers.fragLimit;
+          this.particles.clear();
+          this.projectiles = [];
+          this.worms = [];
+
+          for (const p of msg.players) {
+            const w = new Worm(p.id, p.name, p.color, false, p.loadout);
+            w.applyModifiers(this.modifiers);
+            const spawn = this.terrain.findSpawnPoint();
+            w.spawn(spawn.x, spawn.y);
+            this.worms.push(w);
+          }
+
+          this.isRunning = true;
+          this.onStartMatchReceived?.(msg.modifiers);
         } else if (msg.type === 'STATE') {
           this.applyWorldState(msg);
         } else if (msg.type === 'MATCH_OVER') {
@@ -124,70 +195,101 @@ export class Game {
         }
       }
     };
+
+    this.net.onPeerLeft = (peerId) => {
+      if (this.mode === 'online_host') {
+        this.lobbyPlayers.delete(peerId);
+        this.worms = this.worms.filter(w => w.id !== peerId);
+        this.broadcastLobbyUpdate();
+      }
+    };
   }
 
-  public initMatch(mode: GameMode, p1Loadout: WeaponId[] = DEFAULT_LOADOUT, p2Loadout: WeaponId[] = DEFAULT_LOADOUT) {
+  public initMatch(
+    mode: GameMode,
+    myLoadout: WeaponId[] = DEFAULT_LOADOUT,
+    myName: string = 'Hôte',
+    modifiers: MatchModifiers = DEFAULT_MODIFIERS
+  ) {
     this.mode = mode;
+    this.modifiers = { ...modifiers };
+    this.fragLimit = this.modifiers.fragLimit;
     this.matchWinner = null;
     this.particles.clear();
     this.projectiles = [];
     this.worms = [];
-    this.aiControllers.clear();
     this.remoteInputs.clear();
     this.pendingNetEvents = [];
 
-    if (mode !== 'online_client') {
+    if (mode === 'online_host') {
       this.mapSeed = Math.floor(Math.random() * 1000000);
       this.terrain.generateMap(this.mapSeed);
-    }
 
-    if (mode === 'singleplayer') {
-      // 1 Human Player + 1 AI Bot
-      const p1 = new Worm('p1', 'Joueur 1', CONFIG.COLORS.WORM_P1, false, p1Loadout);
-      const bot = new Worm('bot1', 'Robo-Ver', CONFIG.COLORS.WORM_BOT1, true, p2Loadout);
+      // Register host in lobby
+      this.lobbyPlayers.clear();
+      const hostColor = CONFIG.PLAYER_COLORS[0];
+      const hostInfo: LobbyPlayerInfo = {
+        id: this.net.myPeerId,
+        name: myName || 'Hôte',
+        color: hostColor,
+        isHost: true,
+        loadout: myLoadout
+      };
+      this.lobbyPlayers.set(this.net.myPeerId, hostInfo);
 
-      const spawn1 = this.terrain.findSpawnPoint();
-      p1.spawn(spawn1.x, spawn1.y);
-
-      const spawn2 = this.terrain.findSpawnPoint();
-      bot.spawn(spawn2.x, spawn2.y);
-
-      this.worms.push(p1, bot);
-      this.aiControllers.set(bot.id, new AIController(bot));
-    } else if (mode === 'local2p') {
-      // 2 Players 1 Keyboard
-      const p1 = new Worm('p1', 'Joueur 1 (Vert)', CONFIG.COLORS.WORM_P1, false, p1Loadout);
-      const p2 = new Worm('p2', 'Joueur 2 (Bleu)', CONFIG.COLORS.WORM_P2, false, p2Loadout);
-
-      const spawn1 = this.terrain.findSpawnPoint();
-      p1.spawn(spawn1.x, spawn1.y);
-
-      const spawn2 = this.terrain.findSpawnPoint();
-      p2.spawn(spawn2.x, spawn2.y);
-
-      this.worms.push(p1, p2);
-    } else if (mode === 'online_host') {
-      // Host Player
-      const hostWorm = new Worm(this.net.myPeerId, 'Hôte', CONFIG.COLORS.WORM_P1, false, p1Loadout);
+      const hostWorm = new Worm(this.net.myPeerId, hostInfo.name, hostColor, false, myLoadout);
+      hostWorm.applyModifiers(this.modifiers);
       const spawn = this.terrain.findSpawnPoint();
       hostWorm.spawn(spawn.x, spawn.y);
       this.worms.push(hostWorm);
     } else if (mode === 'online_client') {
-      // Client Player: create local worm representation with valid spawn so player inputs work immediately
       this.terrain.generateMap(this.mapSeed);
-      const clientWorm = new Worm(this.net.myPeerId, 'Moi', CONFIG.COLORS.WORM_P2, false, p1Loadout);
+      const clientColor = CONFIG.PLAYER_COLORS[1];
+      const clientWorm = new Worm(this.net.myPeerId, myName || 'Moi', clientColor, false, myLoadout);
+      clientWorm.applyModifiers(this.modifiers);
       const spawn = this.terrain.findSpawnPoint();
       clientWorm.spawn(spawn.x, spawn.y);
       this.worms.push(clientWorm);
     }
 
+    this.isRunning = false; // Waiting for Host to click Start Match in lobby
+  }
+
+  public startHostMatch() {
+    if (this.mode !== 'online_host') return;
+
+    this.mapSeed = Math.floor(Math.random() * 1000000);
+    this.terrain.generateMap(this.mapSeed);
+    this.particles.clear();
+    this.projectiles = [];
+    this.worms = [];
+
+    const players = this.getLobbyPlayers();
+    for (const p of players) {
+      const w = new Worm(p.id, p.name, p.color, false, p.loadout);
+      w.applyModifiers(this.modifiers);
+      const spawn = this.terrain.findSpawnPoint();
+      w.spawn(spawn.x, spawn.y);
+      this.worms.push(w);
+    }
+
     this.isRunning = true;
+    this.net.broadcast({
+      type: 'START_MATCH',
+      mapSeed: this.mapSeed,
+      modifiers: this.modifiers,
+      players
+    });
   }
 
   public addNetworkPlayer(peerId: string, name: string, loadout: WeaponId[]) {
+    if (this.worms.length >= CONFIG.MAX_PLAYERS) return;
     let worm = this.worms.find(w => w.id === peerId);
     if (!worm) {
-      worm = new Worm(peerId, name || 'Invité', CONFIG.COLORS.WORM_P2, false, loadout);
+      const playerIndex = this.worms.length;
+      const color = CONFIG.PLAYER_COLORS[playerIndex % CONFIG.PLAYER_COLORS.length];
+      worm = new Worm(peerId, name || `Invité ${playerIndex + 1}`, color, false, loadout);
+      worm.applyModifiers(this.modifiers);
       const spawn = this.terrain.findSpawnPoint();
       worm.spawn(spawn.x, spawn.y);
       this.worms.push(worm);
@@ -205,10 +307,10 @@ export class Game {
     const originY = worm.y + Math.sin(angle) * muzzleDist;
 
     if (weapon.pelletCount && weapon.pelletCount > 1) {
-      // Shotgun burst
+      // Shotgun / Dart Gun burst
       for (let i = 0; i < weapon.pelletCount; i++) {
         const spreadAngle = angle + (Math.random() - 0.5) * weapon.spread;
-        const speed = weapon.projectileSpeed * (0.85 + Math.random() * 0.3);
+        const speed = weapon.projectileSpeed * (0.9 + Math.random() * 0.2);
         const proj = new Projectile({
           id: this.nextProjectileId++,
           ownerId: worm.id,
@@ -241,7 +343,6 @@ export class Game {
     if (proj.weapon.craterRadius >= 15) {
       this.triggerScreenShake(8, proj.weapon.craterRadius * 0.25);
     }
-
 
     // Cluster bomb explosion splits into sub-clusters!
     if (proj.weapon.splitCount && !proj.isSubCluster) {
@@ -278,24 +379,21 @@ export class Game {
     }
 
     if (this.mode === 'online_client') {
-      // 1. Broadcast local inputs to host at 60Hz for immediate reaction
+      // 1. Broadcast local inputs to host at 60Hz
       this.net.broadcast({
         type: 'INPUT',
         seq: this.netSeq++,
         input: this.localP1Input
       });
 
-      // 2. Client-side local prediction: simulate local worm physics, movement, and digging
+      // 2. Client-side local prediction: simulate local worm physics
       const localWorm = this.getLocalWorm();
       if (localWorm) {
         localWorm.update(
           this.localP1Input,
           this.terrain,
           this.particles,
-          () => {
-            // Weapon firing: recoil & audio trigger immediately inside worm.attemptFire().
-            // Authoritative projectiles are created on host and synchronized via STATE.
-          }
+          () => {}
         );
       }
 
@@ -304,21 +402,15 @@ export class Game {
       return;
     }
 
-    // --- Host / Local / Singleplayer authoritative simulation ---
+    // --- Host Authoritative Simulation ---
 
-    // 1. Update Worms
+    // 1. Update Worms (up to 8 players)
     for (const worm of this.worms) {
       let input: WormInput;
 
-      if (worm.id === 'p1' || worm.id === this.net.myPeerId) {
+      if (worm.id === this.net.myPeerId) {
         input = this.localP1Input;
-      } else if (worm.id === 'p2') {
-        input = this.localP2Input;
-      } else if (worm.isAI) {
-        const ai = this.aiControllers.get(worm.id);
-        input = ai ? ai.update(this.worms, this.terrain) : { left: false, right: false, up: false, down: false, jump: false, fire: false, rope: false };
       } else {
-        // Network client worm (input updated via incoming messages)
         input = this.remoteInputs.get(worm.id) || { left: false, right: false, up: false, down: false, jump: false, fire: false, rope: false };
       }
 
@@ -356,9 +448,7 @@ export class Game {
                 if (killer.frags >= this.fragLimit && !this.matchWinner) {
                   this.matchWinner = killer;
                   this.onMatchEnd?.(killer);
-                  if (this.mode === 'online_host') {
-                    this.net.broadcast({ type: 'MATCH_OVER', winnerId: killer.id });
-                  }
+                  this.net.broadcast({ type: 'MATCH_OVER', winnerId: killer.id });
                 }
               } else {
                 this.onKillFeed?.(w.name, 'S\'est suicidé');
@@ -379,14 +469,14 @@ export class Game {
     this.particles.update(this.terrain);
 
     // 4. Host broadcasts state to peers at 60Hz
-    if (this.mode === 'online_host') {
-      this.broadcastHostState();
-    }
+    this.broadcastHostState();
   }
 
   private broadcastHostState() {
     const wormStates: WormNetState[] = this.worms.map(w => ({
       id: w.id,
+      name: w.name,
+      color: w.color,
       x: Math.round(w.x * 10) / 10,
       y: Math.round(w.y * 10) / 10,
       vx: Math.round(w.vx * 10) / 10,
@@ -435,18 +525,26 @@ export class Game {
         if (ev.name === 'bazooka') sound.playBazooka();
         else if (ev.name === 'minigun') sound.playMinigun();
         else if (ev.name === 'shotgun') sound.playShotgun();
-        else if (ev.name === 'gauss') sound.playLaser();
+        else if (ev.name === 'gauss' || ev.name === 'railgun') sound.playRailgun();
+        else if (ev.name === 'homing_missile') sound.playHoming();
+        else if (ev.name === 'bouncy_ball') sound.playBouncy();
+        else if (ev.name === 'dart_gun') sound.playDart();
+        else if (ev.name === 'vortex') sound.playVortex();
         else if (ev.name === 'grenade' || ev.name === 'chiquita') sound.playGrenadeBounce();
       }
     }
 
-    // 2. Synchronize worms
+    // 2. Synchronize worms (up to 8 players)
     for (const ws of msg.worms) {
       let worm = this.worms.find(w => w.id === ws.id);
       if (!worm) {
-        worm = new Worm(ws.id, ws.id === this.net.myPeerId ? 'Moi' : 'Hôte', ws.id === this.net.myPeerId ? CONFIG.COLORS.WORM_P2 : CONFIG.COLORS.WORM_P1);
+        worm = new Worm(ws.id, ws.name, ws.color, false, DEFAULT_LOADOUT);
+        worm.applyModifiers(this.modifiers);
         this.worms.push(worm);
       }
+
+      worm.name = ws.name;
+      worm.color = ws.color;
 
       if (ws.health <= 0 && worm.health > 0) {
         sound.playDie();
@@ -471,13 +569,11 @@ export class Game {
           const dy = ws.y - worm.y;
           const distSq = dx * dx + dy * dy;
           if (distSq > 400) {
-            // Large drift (explosion knockback or teleport): snap
             worm.x = ws.x;
             worm.y = ws.y;
             worm.vx = ws.vx;
             worm.vy = ws.vy;
           } else if (distSq > 4) {
-            // Smooth convergence
             worm.x += dx * 0.25;
             worm.y += dy * 0.25;
           }
@@ -536,7 +632,7 @@ export class Game {
       proj.draw(this.ctx);
     }
 
-    // 4. Draw Worms
+    // 4. Draw Worms (all up to 8 worms)
     for (const worm of this.worms) {
       worm.draw(this.ctx);
     }

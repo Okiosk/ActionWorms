@@ -5,6 +5,7 @@ import { Terrain } from './Terrain';
 import { NinjaRope } from './NinjaRope';
 import { ParticleManager } from './Particles';
 import { sound } from './SoundEffects';
+import { MatchModifiers, DEFAULT_MODIFIERS } from '../net/Protocol';
 
 export interface WormInput {
   left: boolean;
@@ -35,7 +36,9 @@ export class Worm {
   public facing: number = 1; // 1 = right, -1 = left
   public aimAngle: number = 0; // radians
 
-  // State
+  // State & Modifiers
+  public modifiers: MatchModifiers = { ...DEFAULT_MODIFIERS };
+  public maxHealth: number = CONFIG.DEFAULT_HEALTH;
   public health: number = CONFIG.DEFAULT_HEALTH;
   public frags: number = 0;
   public deaths: number = 0;
@@ -72,7 +75,23 @@ export class Worm {
     this.resetAmmo();
   }
 
+  public applyModifiers(mods: MatchModifiers) {
+    this.modifiers = { ...mods };
+    this.maxHealth = mods.maxHealth;
+    this.health = Math.min(this.health, this.maxHealth);
+    this.rope.setModifiers(mods.ropeReach);
+    if (mods.unlimitedAmmo) {
+      this.clipAmmo = 999;
+    }
+  }
+
   public resetAmmo() {
+    if (this.modifiers.unlimitedAmmo) {
+      this.clipAmmo = 999;
+      this.shotCooldown = 0;
+      this.clipReloadCooldown = 0;
+      return;
+    }
     const cur = this.getCurrentWeapon();
     if (cur) {
       this.clipAmmo = cur.clipSize;
@@ -105,7 +124,7 @@ export class Worm {
     this.y = y;
     this.vx = 0;
     this.vy = 0;
-    this.health = CONFIG.DEFAULT_HEALTH;
+    this.health = this.maxHealth;
     this.respawnTimer = 0;
     this.rope.release();
     this.resetAmmo();
@@ -197,8 +216,9 @@ export class Worm {
     const reelOut = this.rope.isAttached() && (input.down && input.aimAngle !== undefined);
     this.rope.update(this, terrain, reelIn, reelOut);
 
-    // Gravity
-    this.vy = Math.min(CONFIG.MAX_FALL_SPEED, this.vy + CONFIG.GRAVITY);
+    // Gravity with modifier
+    const effGravity = CONFIG.GRAVITY * this.modifiers.gravity;
+    this.vy = Math.min(CONFIG.MAX_FALL_SPEED, this.vy + effGravity);
 
     // Ground & Dig check
     this.grounded = terrain.isSolid(this.x, this.y + this.radius + 1);
@@ -208,11 +228,12 @@ export class Worm {
     if (input.left) moveDir -= 1;
     if (input.right) moveDir += 1;
 
+    const wormSpeed = CONFIG.WORM_SPEED * this.modifiers.wormSpeed;
     if (moveDir !== 0) {
       if (input.aimAngle === undefined) {
         this.facing = moveDir;
       }
-      this.vx += moveDir * (this.grounded ? CONFIG.WORM_SPEED : CONFIG.WORM_SPEED * 0.4);
+      this.vx += moveDir * (this.grounded ? wormSpeed : wormSpeed * 0.45);
     }
     this.isDigging = false;
 
@@ -227,7 +248,6 @@ export class Worm {
       this.vx *= CONFIG.GROUND_FRICTION;
     } else {
       this.vx *= CONFIG.AIR_FRICTION;
-      this.vy *= CONFIG.AIR_FRICTION;
     }
 
     // Physics step & Slope climbing
@@ -246,13 +266,16 @@ export class Worm {
     if (this.shotCooldown > 0 || this.clipReloadCooldown > 0) return;
 
     const weapon = this.getCurrentWeapon();
-    if (this.clipAmmo <= 0) {
-      // Reload clip
-      this.clipReloadCooldown = weapon.clipReloadTime;
-      return;
+    if (this.modifiers.unlimitedAmmo) {
+      this.clipAmmo = 999;
+    } else {
+      if (this.clipAmmo <= 0) {
+        this.clipReloadCooldown = weapon.clipReloadTime;
+        return;
+      }
+      this.clipAmmo--;
     }
 
-    this.clipAmmo--;
     this.shotCooldown = weapon.reloadTime;
 
     // Apply recoil knockback
@@ -264,7 +287,11 @@ export class Worm {
     if (weapon.id === 'bazooka') sound.playBazooka();
     else if (weapon.id === 'minigun') sound.playMinigun();
     else if (weapon.id === 'shotgun') sound.playShotgun();
-    else if (weapon.id === 'gauss') sound.playLaser();
+    else if (weapon.id === 'gauss' || weapon.id === 'railgun') sound.playRailgun();
+    else if (weapon.id === 'homing_missile') sound.playHoming();
+    else if (weapon.id === 'bouncy_ball') sound.playBouncy();
+    else if (weapon.id === 'dart_gun') sound.playDart();
+    else if (weapon.id === 'vortex') sound.playVortex();
     else if (weapon.id === 'grenade' || weapon.id === 'chiquita') sound.playGrenadeBounce();
 
     // Spawn muzzle sparks
@@ -276,7 +303,7 @@ export class Worm {
     onShoot(this, weapon, this.aimAngle);
 
     // Auto-reload when clip empty
-    if (this.clipAmmo <= 0) {
+    if (!this.modifiers.unlimitedAmmo && this.clipAmmo <= 0) {
       this.clipReloadCooldown = weapon.clipReloadTime;
     }
   }

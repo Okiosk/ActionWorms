@@ -2,8 +2,36 @@ import { WeaponId } from '../weapons/WeaponDef';
 import { WormInput } from '../engine/Worm';
 import { RopeState } from '../engine/NinjaRope';
 
+export interface MatchModifiers {
+  gravity: number; // 1.0 = normal, 0.35 = lunar, 1.8 = heavy, 0.0 = zero-g
+  ropeReach: 'normal' | 'infinite'; // 220px vs infinite
+  wormSpeed: number; // 1.0 = normal, 1.5 = turbo, 0.75 = tactical
+  maxHealth: number; // 100 = standard, 50 = hardcore, 200 = titan
+  unlimitedAmmo: boolean; // false = standard clips, true = infinite no reload
+  fragLimit: number; // 5, 10, 15, 20, 30
+}
+
+export const DEFAULT_MODIFIERS: MatchModifiers = {
+  gravity: 1.0,
+  ropeReach: 'normal',
+  wormSpeed: 1.0,
+  maxHealth: 100,
+  unlimitedAmmo: false,
+  fragLimit: 10
+};
+
+export interface LobbyPlayerInfo {
+  id: string;
+  name: string;
+  color: string;
+  isHost: boolean;
+  loadout: WeaponId[];
+}
+
 export interface WormNetState {
   id: string;
+  name: string;
+  color: string;
   x: number;
   y: number;
   vx: number;
@@ -46,7 +74,23 @@ export type NetMessage =
       mapSeed: number;
       mapWidth: number;
       mapHeight: number;
-      fragLimit: number;
+      modifiers: MatchModifiers;
+      players: LobbyPlayerInfo[];
+    }
+  | {
+      type: 'LOBBY_UPDATE';
+      players: LobbyPlayerInfo[];
+      modifiers: MatchModifiers;
+    }
+  | {
+      type: 'SET_MODIFIERS';
+      modifiers: MatchModifiers;
+    }
+  | {
+      type: 'START_MATCH';
+      mapSeed: number;
+      modifiers: MatchModifiers;
+      players: LobbyPlayerInfo[];
     }
   | {
       type: 'INPUT';

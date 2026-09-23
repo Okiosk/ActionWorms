@@ -169,6 +169,11 @@ export class NetworkManager {
 
   private setupHostConnection(conn: DataConnection) {
     console.log('[NET HOST] Incoming connection from:', conn.peer, 'conn.open:', conn.open);
+    if (this.connections.size >= 7 && !this.connections.has(conn.peer)) {
+      console.warn('[NET HOST] Room is full (max 8 players), rejecting connection:', conn.peer);
+      conn.close();
+      return;
+    }
     this.connections.set(conn.peer, conn);
 
     const onOpen = () => {

@@ -139,6 +139,96 @@ export const WEAPON_REGISTRY: Record<WeaponId, WeaponDef> = {
     bounces: 0,
     fuseFrames: 40,
     gravityScale: 0.05
+  },
+  homing_missile: {
+    id: 'homing_missile',
+    name: 'Missile Guidé',
+    description: 'Roquette autoguidée traquant le ver ennemi le plus proche.',
+    icon: '🎯',
+    reloadTime: 45,
+    clipSize: 1,
+    clipReloadTime: 50,
+    recoil: 3.2,
+    projectileSpeed: 5.5,
+    spread: 0.05,
+    damage: 46,
+    craterRadius: 20,
+    bounces: 0,
+    fuseFrames: 180,
+    gravityScale: 0.1,
+    homing: true
+  },
+  railgun: {
+    id: 'railgun',
+    name: 'Heavy Railgun',
+    description: 'Rayon cinétique supersonique perforant la terre sur toute la carte.',
+    icon: '⚡',
+    reloadTime: 50,
+    clipSize: 1,
+    clipReloadTime: 60,
+    recoil: 5.5,
+    projectileSpeed: 38.0,
+    spread: 0.0,
+    damage: 70,
+    craterRadius: 8,
+    bounces: 0,
+    fuseFrames: 25,
+    gravityScale: 0.0,
+    piercing: true
+  },
+  bouncy_ball: {
+    id: 'bouncy_ball',
+    name: 'Balle Rebondissante',
+    description: 'Sphère hyper-élastique qui ricoche jusqu\'à 15 fois à vive allure.',
+    icon: '🔮',
+    reloadTime: 22,
+    clipSize: 3,
+    clipReloadTime: 45,
+    recoil: 1.8,
+    projectileSpeed: 9.0,
+    spread: 0.08,
+    damage: 35,
+    craterRadius: 14,
+    bounces: 15,
+    fuseFrames: 220,
+    gravityScale: 0.45
+  },
+  dart_gun: {
+    id: 'dart_gun',
+    name: 'Fléchettes Toxiques',
+    description: 'Salve de 3 aiguilles empoisonnées perforantes provoquant des hémorragies.',
+    icon: '💉',
+    reloadTime: 20,
+    clipSize: 3,
+    clipReloadTime: 40,
+    recoil: 1.0,
+    projectileSpeed: 14.0,
+    spread: 0.08,
+    damage: 24,
+    craterRadius: 3,
+    bounces: 0,
+    fuseFrames: 80,
+    gravityScale: 0.15,
+    pelletCount: 3,
+    toxic: true
+  },
+  vortex: {
+    id: 'vortex',
+    name: 'Canon Vortex',
+    description: 'Singularité gravitationnelle aspirant vers et débris avant d\'imploser.',
+    icon: '🌀',
+    reloadTime: 65,
+    clipSize: 1,
+    clipReloadTime: 75,
+    recoil: 4.0,
+    projectileSpeed: 4.2,
+    spread: 0.04,
+    damage: 60,
+    craterRadius: 28,
+    bounces: 0,
+    fuseFrames: 100,
+    gravityScale: 0.05,
+    vortex: true
   }
 };
 
@@ -150,13 +240,18 @@ export const ALL_WEAPON_IDS: WeaponId[] = [
   'chiquita',
   'gauss',
   'mine',
-  'flamer'
+  'flamer',
+  'homing_missile',
+  'railgun',
+  'bouncy_ball',
+  'dart_gun',
+  'vortex'
 ];
 
 export const DEFAULT_LOADOUT: WeaponId[] = [
   'bazooka',
-  'minigun',
-  'shotgun',
-  'grenade',
-  'chiquita'
+  'homing_missile',
+  'railgun',
+  'bouncy_ball',
+  'vortex'
 ];

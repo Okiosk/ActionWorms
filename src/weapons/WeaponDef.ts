@@ -6,7 +6,12 @@ export type WeaponId =
   | 'chiquita'
   | 'gauss'
   | 'mine'
-  | 'flamer';
+  | 'flamer'
+  | 'homing_missile'
+  | 'railgun'
+  | 'bouncy_ball'
+  | 'dart_gun'
+  | 'vortex';
 
 export interface WeaponDef {
   id: WeaponId;
@@ -27,4 +32,7 @@ export interface WeaponDef {
   piercing?: boolean;
   pelletCount?: number;
   splitCount?: number;
+  homing?: boolean;
+  vortex?: boolean;
+  toxic?: boolean;
 }

@@ -12,6 +12,12 @@ export class NinjaRope {
   public hookVy: number = 0;
   public length: number = 0;
   public maxLength: number = CONFIG.ROPE_MAX_LENGTH;
+  public isInfinite: boolean = false;
+
+  public setModifiers(reach: 'normal' | 'infinite') {
+    this.isInfinite = reach === 'infinite';
+    this.maxLength = this.isInfinite ? 99999 : CONFIG.ROPE_MAX_LENGTH;
+  }
 
   public shoot(originX: number, originY: number, angle: number) {
     this.state = 'flying';
@@ -49,7 +55,7 @@ export class NinjaRope {
         this.hookY += stepVy;
 
         const dist = Math.hypot(this.hookX - worm.x, this.hookY - worm.y);
-        if (dist > this.maxLength) {
+        if (!this.isInfinite && dist > this.maxLength) {
           this.release();
           return;
         }
@@ -57,7 +63,7 @@ export class NinjaRope {
         if (terrain.isSolid(this.hookX, this.hookY)) {
           // Latch onto terrain!
           this.state = 'attached';
-          this.length = Math.max(25, dist);
+          this.length = Math.max(20, dist);
           sound.playRopeLatch();
           return;
         }
@@ -71,9 +77,9 @@ export class NinjaRope {
 
       // Reeling controls
       if (reelIn) {
-        this.length = Math.max(20, this.length - 2.8);
+        this.length = Math.max(16, this.length - 3.8);
       } else if (reelOut) {
-        this.length = Math.min(this.maxLength, this.length + 2.5);
+        this.length = Math.min(this.maxLength, this.length + 3.2);
       }
 
       // Pendulum rope physics constraint

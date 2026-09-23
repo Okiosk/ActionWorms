@@ -1,96 +1,97 @@
-# Action Worms (Liero Web P2P)
+# Action Worms (Liero Web P2P - Jusqu'à 8 Joueurs)
 
-Clone fidèle, moderne et dynamique du jeu culte **Liero** (1998), jouable directement dans votre navigateur web en multijoueur **Peer-to-Peer (WebRTC)**, en **local à 2 joueurs sur un même clavier**, ou en **solo contre des Bots IA**.
+Clone fidèle, moderne et dynamique du jeu culte **Liero** (1998), jouable directement dans votre navigateur web en multijoueur **100% Peer-to-Peer (WebRTC)** jusqu'à **8 joueurs en simultané**.
 
 ---
 
-## 🕹️ Modes de Jeu
+## 🌐 Multijoueur Peer-to-Peer (WebRTC)
 
-1. **🤖 Partie Solo vs IA** : Affrontez un ver contrôlé par une intelligence artificielle capable de creuser, viser avec anticipation, utiliser le grappin et changer d'arme selon la distance.
-2. **👥 2 Joueurs Local (1 Clavier)** : Duel en face à face sur la même machine.
-3. **🌐 Multijoueur en Ligne Peer-to-Peer (WebRTC)** :
-   - **Créer un salon (Hôte)** : Génère un code court ou un lien d'invitation direct en un clic (`#room=liero-xxxx`).
-   - **Rejoindre un salon** : Entrez le code de votre ami ou ouvrez directement le lien partagé.
-   - *Aucun serveur de jeu centralisé requis : les données transitent directement de navigateur à navigateur grâce aux DataChannels WebRTC via PeerJS.*
+- **Capacité de 2 à 8 joueurs** : 1 Hôte + jusqu'à 7 invités connectés en direct.
+- **Créer un salon (Hôte)** : Génère un code court ou un lien d'invitation direct en un clic (`#room=liero-xxxx`).
+- **Rejoindre un salon** : Entrez le code ou cliquez directement sur le lien partagé par votre ami.
+- **Zéro serveur de jeu** : Toutes les données et la physique transitent directement entre navigateurs via les DataChannels WebRTC de PeerJS.
+
+---
+
+## ⚙️ Modificateurs de Partie (Configurés par l'Hôte dans le Salon)
+
+Avant de lancer le combat, l'hôte peut personnaliser les règles du match :
+
+1. **🌍 Gravité** :
+   - *Normale* (1.0x)
+   - *🌙 Lunaire* (0.35x - sauts gigantesques et planés)
+   - *⚓ Élevée* (1.8x - combats intenses au sol)
+   - *🚀 Zéro-G* (0.0x - dérive spatiale propulsée par le recul et le grappin !)
+2. **🪢 Grappin Ninja (Ninja Rope)** :
+   - *Standard* (Portée 220px)
+   - *♾️ Portée Infinie* (Accrochage à n'importe quelle distance à travers le niveau)
+3. **⚡ Vitesse des Vers** :
+   - *Normale* (1.0x) | *🔥 Turbo* (1.5x) | *🐢 Tactique* (0.75x)
+4. **❤️ Santé Maximale** :
+   - *100 PV* (Standard) | *💀 50 PV* (Hardcore / One-shot) | *🛡️ 200 PV* (Titans)
+5. **♾️ Munitions & Rechargement** :
+   - *Standard* (Clips limités et temps de rechargement)
+   - *💥 Tirs Illimités* (Tir continu sans aucun rechargement)
+6. **🏆 Objectif de Frags** :
+   - 5, 10 (par défaut), 15, 20 ou 30 frags
 
 ---
 
 ## 🎯 Contrôles
 
-### Joueur 1 / Mode Solo / Mode P2P
 | Action | Touche(s) |
 |---|---|
-| **Déplacement** | `Q` / `D` ou `A` / `D` (ou `Flèches Gauche/Droite`) |
-| **Sauter** | `Z` / `W` / `Espace` |
-| **Viser** | Déplacement du curseur de la souris ou `Haut` / `Bas` |
+| **Déplacement** | `Q` / `D` ou `A` / `D` ou `Flèches Gauche/Droite` |
+| **Sauter** | `Z` / `W` / `Espace` ou `Flèche Haut` |
+| **Viser** | Déplacement du curseur de la souris |
 | **Tirer** | Clic Gauche ou `F` ou `Entrée` |
-| **Ninja Rope (Grappin)** | Clic Droit ou `E` ou `Shift` (maintenir pour s'accrocher et se balancer, relâcher pour lâcher) |
+| **Ninja Rope (Grappin)** | Clic Droit ou `E` ou `Shift` (maintenir pour s'accrocher et se balancer, relâcher pour effet fronde *slingshot*) |
 | **Changer d'arme** | Touches `1` à `5` ou Molette de la souris |
-
-### Joueur 2 (Mode Local 2P)
-| Action | Touche(s) |
-|---|---|
-| **Déplacement** | `Flèche Gauche` / `Flèche Droite` |
-| **Sauter** | `Flèche Haut` ou `Pavé Num 5` |
-| **Viser Haut / Bas** | `Pavé Num 8` / `Pavé Num 2` ou `I` / `K` |
-| **Tirer** | `Entrée` ou `Pavé Num Entrée` ou `P` |
-| **Ninja Rope (Grappin)** | `Pavé Num 0` ou `Shift Droit` ou `O` |
-| **Sélection d'arme** | `Pavé Num 1`, `2`, `3` ou `L` |
+| **Plein Écran** | Bouton `⛶ Plein Écran` en haut au centre |
 
 ---
 
-## 🚀 Arsenal & Armes
+## 🚀 Arsenal & Armes (13 Armes)
 
-Chaque joueur peut personnaliser son paquetage de **5 armes** parmi les 8 disponibles :
+Chaque joueur peut personnaliser son paquetage de **5 armes** parmi les 13 disponibles :
 
-- 🚀 **Bazooka** : Roquette rapide avec traînée de fumée et grosse détonation.
-- ⚡ **Mini-gun** : Mitrailleuse lourde à haute cadence de tir criblant la roche et la terre.
-- 💥 **Fusil à pompe** : Salve dévastatrice de 8 plombs à moyenne et courte portée.
-- 💣 **Grenade** : Projectile à rebonds multiples et mèche à retardement de 2 secondes.
-- 🍌 **Chiquita Bomb** : Bombe à fragmentation se divisant en 6 sous-bombes explosives.
-- 🔷 **Canon Gauss** : Faisceau d'énergie cinétique instantané perçant les parois et vaporisant la matière.
-- ⚠️ **Mine sautante** : Piège explosif réactif à la proximité des ennemis.
-- 🔥 **Lance-flammes** : Jet continu de flammes embrasant le terrain et les vers.
-
----
-
-## ⚙️ Architecture Technique
-
-- **Terrain Destructible** : Moteur de voxels/bitmaps 2D 800x500 avec rendu accéléré Canvas Offscreen. Découpe circulaire instantanée (`destination-out`) et projection persistante de taches de sang sur la terre.
-- **Physique Pendulaire (Ninja Rope)** : Modélisation des contraintes de corde tendue avec transfert d'énergie cinétique angulaire.
-- **Réseau P2P WebRTC** : Architecture Host-Autoritaire synchronisant les entrées à 60Hz et les états / cratères / sons via PeerJS.
-- **Synthèse Audio Procédurale** : Moteur Web Audio API autonome générant en temps réel les bruits d'explosions, tirs, grappin, creusage et cris sans aucun fichier audio externe lourd à charger.
+1. 🚀 **Bazooka** : Roquette lourde avec traînée de fumée et grosse détonation.
+2. 🎯 **Missile Guidé** : Missile autoguidé qui traque le ver ennemi le plus proche.
+3. ⚡ **Heavy Railgun** : Rayon cinétique supersonique perforant la terre sur toute la carte.
+4. 🔮 **Balle Rebondissante** : Sphère hyper-élastique qui ricoche jusqu'à 15 fois à vive allure dans les galeries.
+5. 💉 **Fléchettes Toxiques** : Salve de 3 aiguilles empoisonnées perforantes provoquant des hémorragies.
+6. 🌀 **Canon Vortex** : Singularité gravitationnelle aspirant vers et débris avant d'imploser.
+7. ⚡ **Mini-gun** : Mitrailleuse lourde à très haute cadence criblant le terrain.
+8. 💥 **Fusil à pompe** : Salve dévastatrice de 8 plombs à courte et moyenne portée.
+9. 💣 **Grenade** : Projectile à rebonds multiples et mèche de 2 secondes.
+10. 🍌 **Chiquita Bomb** : Bombe à fragmentation se divisant en 6 sous-bombes explosives.
+11. 🔷 **Canon Gauss** : Faisceau perçant haute vélocité.
+12. ⚠️ **Mine sautante** : Piège explosif se déclenchant à l'approche d'un ennemi.
+13. 🔥 **Lance-flammes** : Jet continu de flammes consumant la roche et les vers.
 
 ---
 
-## 💻 Démarrage en Développement Local
+## 🎨 Palette des 8 Vers
+
+Chaque joueur se voit attribuer une couleur distincte :
+1. 🟩 Vert (`#44cc44`)
+2. 🟦 Bleu (`#3388ff`)
+3. 🟥 Rouge (`#ff4444`)
+4. 🟨 Jaune (`#ffcc22`)
+5. 🟪 Violet (`#b844ff`)
+6. 🟧 Orange (`#ff8822`)
+7. 🩵 Cyan (`#22e8dd`)
+8. 🩷 Rose (`#ff44aa`)
+
+---
+
+## 🛠️ Installation & Lancement en local
 
 ```bash
-# Installer les dépendances
+git clone https://github.com/Okiosk/ActionWorms.git
+cd ActionWorms
 npm install
-
-# Lancer le serveur de développement Vite
 npm run dev
-
-# Compiler pour la production
-npm run build
 ```
-Accédez ensuite à `http://localhost:3000` dans votre navigateur.
 
----
-
-## 🚀 Déploiement sur GitHub Pages
-
-### Méthode Automatique (Recommandée - GitHub Actions)
-1. Poussez vos modifications sur la branche `main` (`git add .`, `git commit -m "Deploy"`, `git push`).
-2. Sur votre dépôt GitHub, allez dans **Settings > Pages**.
-3. Sous **Build and deployment > Source**, sélectionnez **GitHub Actions**.
-4. Le workflow se lance automatiquement et le site sera accessible en quelques secondes sur :
-   `https://okiosk.github.io/ActionWorms/`
-
-### Méthode Directe (gh-pages)
-Vous pouvez également publier directement en ligne de commande :
-```bash
-npm run deploy
-```
-Puis dans **Settings > Pages > Source**, choisissez la branche `gh-pages` et dossier `/ (root)`.
+Ouvrez l'URL locale dans plusieurs onglets ou navigateurs pour tester le multijoueur P2P en direct !
