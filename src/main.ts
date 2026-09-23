@@ -15,6 +15,9 @@ window.addEventListener('DOMContentLoaded', () => {
   const game = new Game(canvas, net);
   const hud = new HUD(hudContainer);
 
+  (window as any).game = game;
+  (window as any).net = net;
+
   let currentP1Loadout: WeaponId[] = [...DEFAULT_LOADOUT];
   let currentP2Loadout: WeaponId[] = [...DEFAULT_LOADOUT];
 

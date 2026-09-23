@@ -44,8 +44,8 @@ export class NetworkManager {
 
   // Host: Create a Room
   public async hostRoom(roomId?: string): Promise<string> {
-    this.role = 'host';
     this.close();
+    this.role = 'host';
 
     return new Promise((resolve, reject) => {
       // Auto-generate clean 6-character room id in lowercase
@@ -84,8 +84,8 @@ export class NetworkManager {
 
   // Client: Join a Room
   public async joinRoom(targetRoomId: string): Promise<void> {
-    this.role = 'client';
     this.close();
+    this.role = 'client';
 
     const cleanTarget = targetRoomId.toLowerCase().trim();
 
@@ -168,14 +168,21 @@ export class NetworkManager {
   }
 
   private setupHostConnection(conn: DataConnection) {
-    // Register connection immediately
+    console.log('[NET HOST] Incoming connection from:', conn.peer, 'conn.open:', conn.open);
     this.connections.set(conn.peer, conn);
 
-    conn.on('open', () => {
+    const onOpen = () => {
+      console.log('[NET HOST] Connection OPEN with:', conn.peer);
       this.connections.set(conn.peer, conn);
       this.startMonitoring();
       this.onPeerJoined?.(conn.peer);
-    });
+    };
+
+    if (conn.open) {
+      onOpen();
+    } else {
+      conn.on('open', onOpen);
+    }
 
     conn.on('data', (data) => {
       if (!this.connections.has(conn.peer)) {
@@ -185,6 +192,7 @@ export class NetworkManager {
     });
 
     conn.on('close', () => {
+      console.log('[NET HOST] Connection CLOSED with:', conn.peer);
       this.connections.delete(conn.peer);
       if (this.connections.size === 0) {
         this.stopMonitoring();
@@ -193,7 +201,7 @@ export class NetworkManager {
     });
 
     conn.on('error', (err) => {
-      console.error('Host connection error:', err);
+      console.error('[NET HOST] Connection ERROR with:', conn.peer, err);
       this.connections.delete(conn.peer);
       if (this.connections.size === 0) {
         this.stopMonitoring();
@@ -204,6 +212,9 @@ export class NetworkManager {
 
   private handleIncomingMessage(rawMsg: unknown, fromId: string) {
     const msg = rawMsg as NetMessage;
+    if (msg.type === 'JOIN' || msg.type === 'WELCOME' || msg.type === 'MATCH_OVER') {
+      console.log(`[NET RECV ${this.role}] type:`, msg.type, 'from:', fromId);
+    }
     this.lastPacketTime = performance.now();
     this.packetCountWindow++;
 
@@ -262,21 +273,22 @@ export class NetworkManager {
           conn.send(msg);
         }
       }
-    } else if (this.role === 'client' && this.hostConnection && this.hostConnection.open) {
-      this.hostConnection.send(msg);
+    } else if (this.role === 'client') {
+      if (this.hostConnection && this.hostConnection.open) {
+        this.hostConnection.send(msg);
+      }
     }
   }
 
   public sendTo(peerId: string, msg: NetMessage) {
     const conn = this.connections.get(peerId);
     if (!conn) {
-      console.warn(`sendTo: No connection found for peer ${peerId}`);
+      console.warn(`[NET sendTo]: No connection found for peer ${peerId}`);
       return;
     }
     if (conn.open) {
       conn.send(msg);
     } else {
-      // If not yet fully open, queue to send upon open
       conn.on('open', () => {
         conn.send(msg);
       });
