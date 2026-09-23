@@ -63,7 +63,7 @@ export class HUD {
 
       <!-- Controls Quick Guide at bottom -->
       <div class="hud-controls-hint" id="hud-controls-hint">
-        🎮 <b>Contrôles :</b> [Q / D] Déplacement | [S] Creuser bas | [Z / Espace] Sauter | [Souris / Visée] Tirer [Clic G] | [Clic D / E] Grappin | [1-5 / Molette] Armes | [⛶] Plein Écran
+        🎮 <b>Contrôles :</b> [Q / D] Déplacement | [Z / Espace] Sauter | [Souris / Visée] Tirer [Clic G] | [Clic D / E] Grappin | [1-5 / Molette] Armes | [⛶] Plein Écran
       </div>
     `;
 

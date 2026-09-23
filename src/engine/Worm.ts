@@ -203,7 +203,7 @@ export class Worm {
     // Ground & Dig check
     this.grounded = terrain.isSolid(this.x, this.y + this.radius + 1);
 
-    // Movement & Digging
+    // Movement
     let moveDir = 0;
     if (input.left) moveDir -= 1;
     if (input.right) moveDir += 1;
@@ -212,47 +212,9 @@ export class Worm {
       if (input.aimAngle === undefined) {
         this.facing = moveDir;
       }
-
-      const checkAheadX = this.x + moveDir * (this.radius + 2);
-      const isBlocked = terrain.isSolid(checkAheadX, this.y);
-
-      if (isBlocked && terrain.isDirt(checkAheadX, this.y)) {
-        // Digging into soft dirt!
-        this.isDigging = true;
-        terrain.carveCircle(checkAheadX, this.y, CONFIG.DIG_RADIUS);
-        particles.spawn(checkAheadX, this.y, -moveDir * 1.5, -0.8, 'dirt', undefined, 2, 20);
-
-        if (this.digSoundCooldown <= 0) {
-          sound.playDig();
-          this.digSoundCooldown = 9;
-        }
-
-        // Slow burrow speed
-        this.vx += moveDir * (CONFIG.WORM_SPEED * CONFIG.DIG_SPEED_FACTOR);
-      } else {
-        this.isDigging = false;
-        // Normal walking
-        this.vx += moveDir * (this.grounded ? CONFIG.WORM_SPEED : CONFIG.WORM_SPEED * 0.4);
-      }
-    } else {
-      this.isDigging = false;
+      this.vx += moveDir * (this.grounded ? CONFIG.WORM_SPEED : CONFIG.WORM_SPEED * 0.4);
     }
-
-    // Downward digging
-    if (input.down && !this.rope.isAttached()) {
-      const checkBelowY = this.y + this.radius + 2;
-      if (terrain.isDirt(this.x, checkBelowY)) {
-        this.isDigging = true;
-        terrain.carveCircle(this.x, checkBelowY, CONFIG.DIG_RADIUS);
-        particles.spawn(this.x, checkBelowY, (Math.random() - 0.5) * 1.5, -1.0, 'dirt', undefined, 2, 20);
-
-        if (this.digSoundCooldown <= 0) {
-          sound.playDig();
-          this.digSoundCooldown = 9;
-        }
-        this.vy += CONFIG.WORM_SPEED * CONFIG.DIG_SPEED_FACTOR * 0.5;
-      }
-    }
+    this.isDigging = false;
 
     // Jump
     if (input.jump && this.grounded && !this.rope.isAttached()) {
@@ -331,9 +293,9 @@ export class Worm {
       if (!terrain.isSolid(targetX, this.y)) {
         this.x = targetX;
       } else {
-        // Try slope climbing (step up 1-3px)
+        // Try slope climbing (step up 1-4px)
         let climbed = false;
-        for (let stepUp = 1; stepUp <= 3; stepUp++) {
+        for (let stepUp = 1; stepUp <= 4; stepUp++) {
           if (!terrain.isSolid(targetX, this.y - stepUp)) {
             this.x = targetX;
             this.y -= stepUp;

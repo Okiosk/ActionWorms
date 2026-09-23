@@ -20,8 +20,7 @@ Clone fidèle, moderne et dynamique du jeu culte **Liero** (1998), jouable direc
 ### Joueur 1 / Mode Solo / Mode P2P
 | Action | Touche(s) |
 |---|---|
-| **Déplacement / Creuser** | `Q` / `D` ou `A` / `D` (ou `Flèches Gauche/Droite`) |
-| **Creuser vers le bas** | `S` (maintien enfoncé dans la terre) |
+| **Déplacement** | `Q` / `D` ou `A` / `D` (ou `Flèches Gauche/Droite`) |
 | **Sauter** | `Z` / `W` / `Espace` |
 | **Viser** | Déplacement du curseur de la souris ou `Haut` / `Bas` |
 | **Tirer** | Clic Gauche ou `F` ou `Entrée` |
@@ -32,7 +31,6 @@ Clone fidèle, moderne et dynamique du jeu culte **Liero** (1998), jouable direc
 | Action | Touche(s) |
 |---|---|
 | **Déplacement** | `Flèche Gauche` / `Flèche Droite` |
-| **Creuser vers le bas** | `Flèche Bas` |
 | **Sauter** | `Flèche Haut` ou `Pavé Num 5` |
 | **Viser Haut / Bas** | `Pavé Num 8` / `Pavé Num 2` ou `I` / `K` |
 | **Tirer** | `Entrée` ou `Pavé Num Entrée` ou `P` |
