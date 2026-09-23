@@ -18,6 +18,7 @@ export class HUD {
 
   private killFeedEl: HTMLElement;
   private killFeedTimeout: number | null = null;
+  private netBadgeEl: HTMLElement;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -43,6 +44,7 @@ export class HUD {
         <!-- Kill Feed & Info -->
         <div class="hud-center">
           <div class="hud-killfeed" id="hud-killfeed"></div>
+          <div class="hud-net-badge" id="hud-net-badge" style="display:none; font-size:11px; padding:3px 10px; border-radius:12px; margin-bottom:5px; font-weight:600; font-family:monospace; box-shadow:0 2px 6px rgba(0,0,0,0.4); text-align:center;"></div>
           <button class="btn-fullscreen" id="btn-toggle-fullscreen" title="Plein Écran">⛶ Plein Écran</button>
         </div>
 
@@ -87,6 +89,7 @@ export class HUD {
     this.p2Frags = this.container.querySelector('#hud-p2-frags')!;
 
     this.killFeedEl = this.container.querySelector('#hud-killfeed')!;
+    this.netBadgeEl = this.container.querySelector('#hud-net-badge')!;
   }
 
   public showKill(killer: string, victim: string) {
@@ -101,6 +104,36 @@ export class HUD {
 
   public update(game: Game) {
     if (!game.isRunning || game.worms.length === 0) return;
+
+    // Network Diagnostics HUD
+    if (game.mode === 'online_host' || game.mode === 'online_client') {
+      this.netBadgeEl.style.display = 'block';
+      const now = performance.now();
+      const timeSinceLastPacket = now - game.net.lastPacketTime;
+      const isStalled = game.net.isConnected && game.net.lastPacketTime > 0 && timeSinceLastPacket > 1500;
+
+      if (!game.net.isConnected) {
+        this.netBadgeEl.style.background = 'rgba(200, 30, 30, 0.8)';
+        this.netBadgeEl.style.color = '#fff';
+        this.netBadgeEl.textContent = '🔴 Déconnecté';
+      } else if (isStalled) {
+        this.netBadgeEl.style.background = 'rgba(220, 150, 10, 0.85)';
+        this.netBadgeEl.style.color = '#fff';
+        this.netBadgeEl.textContent = `🟡 En attente de l'hôte (${Math.round(timeSinceLastPacket / 1000)}s)...`;
+      } else if (game.mode === 'online_host') {
+        const ping = game.net.pingMs ? `${game.net.pingMs}ms` : '<1ms';
+        this.netBadgeEl.style.background = 'rgba(20, 140, 40, 0.8)';
+        this.netBadgeEl.style.color = '#fff';
+        this.netBadgeEl.textContent = `🟢 Hôte P2P | ${game.net.packetsReceivedPerSec} pkt/s | Ping: ${ping}`;
+      } else {
+        const ping = game.net.pingMs ? `${game.net.pingMs}ms` : '<1ms';
+        this.netBadgeEl.style.background = 'rgba(20, 140, 40, 0.8)';
+        this.netBadgeEl.style.color = '#fff';
+        this.netBadgeEl.textContent = `🟢 Client P2P | ${game.net.packetsReceivedPerSec} pkt/s | Ping: ${ping}`;
+      }
+    } else {
+      this.netBadgeEl.style.display = 'none';
+    }
 
     // Identify local player and opponent
     const p1 = game.worms.find(w => w.id === 'p1' || (game.net.myPeerId && w.id === game.net.myPeerId)) || game.worms[0];

@@ -28,6 +28,12 @@ export class NetworkManager {
   public myPeerId: string = '';
   public isConnected: boolean = false;
   public pingMs: number = 0;
+  public packetsReceivedPerSec: number = 0;
+  public lastPacketTime: number = 0;
+
+  private packetCountWindow: number = 0;
+  private statInterval: number | null = null;
+  private pingInterval: number | null = null;
 
   // Callbacks
   public onMessageReceived: ((msg: NetMessage, fromId: string) => void) | null = null;
@@ -112,17 +118,19 @@ export class NetworkManager {
               isSettled = true;
               if (timeoutId) clearTimeout(timeoutId);
               this.isConnected = true;
+              this.startMonitoring();
               this.onConnected?.(cleanTarget);
               resolve();
             }
           });
 
           conn.on('data', (data) => {
-            this.onMessageReceived?.(data as NetMessage, cleanTarget);
+            this.handleIncomingMessage(data, cleanTarget);
           });
 
           conn.on('close', () => {
             this.isConnected = false;
+            this.stopMonitoring();
             this.onPeerLeft?.(cleanTarget);
           });
 
@@ -165,6 +173,7 @@ export class NetworkManager {
 
     conn.on('open', () => {
       this.connections.set(conn.peer, conn);
+      this.startMonitoring();
       this.onPeerJoined?.(conn.peer);
     });
 
@@ -172,19 +181,77 @@ export class NetworkManager {
       if (!this.connections.has(conn.peer)) {
         this.connections.set(conn.peer, conn);
       }
-      this.onMessageReceived?.(data as NetMessage, conn.peer);
+      this.handleIncomingMessage(data, conn.peer);
     });
 
     conn.on('close', () => {
       this.connections.delete(conn.peer);
+      if (this.connections.size === 0) {
+        this.stopMonitoring();
+      }
       this.onPeerLeft?.(conn.peer);
     });
 
     conn.on('error', (err) => {
       console.error('Host connection error:', err);
       this.connections.delete(conn.peer);
+      if (this.connections.size === 0) {
+        this.stopMonitoring();
+      }
       this.onPeerLeft?.(conn.peer);
     });
+  }
+
+  private handleIncomingMessage(rawMsg: unknown, fromId: string) {
+    const msg = rawMsg as NetMessage;
+    this.lastPacketTime = performance.now();
+    this.packetCountWindow++;
+
+    if (msg.type === 'PING') {
+      if (this.role === 'host') {
+        this.sendTo(fromId, { type: 'PONG', time: msg.time });
+      } else {
+        this.broadcast({ type: 'PONG', time: msg.time });
+      }
+      return;
+    }
+
+    if (msg.type === 'PONG') {
+      this.pingMs = Math.max(1, Math.round(performance.now() - msg.time));
+      return;
+    }
+
+    this.onMessageReceived?.(msg, fromId);
+  }
+
+  private startMonitoring() {
+    this.stopMonitoring();
+
+    this.packetCountWindow = 0;
+    this.packetsReceivedPerSec = 0;
+    this.lastPacketTime = performance.now();
+
+    this.statInterval = window.setInterval(() => {
+      this.packetsReceivedPerSec = this.packetCountWindow;
+      this.packetCountWindow = 0;
+    }, 1000);
+
+    this.pingInterval = window.setInterval(() => {
+      if (this.isConnected) {
+        this.broadcast({ type: 'PING', time: performance.now() });
+      }
+    }, 1200);
+  }
+
+  private stopMonitoring() {
+    if (this.statInterval !== null) {
+      clearInterval(this.statInterval);
+      this.statInterval = null;
+    }
+    if (this.pingInterval !== null) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
   }
 
   // Broadcast message from host to all clients or send to host
@@ -234,5 +301,6 @@ export class NetworkManager {
 
     this.role = 'offline';
     this.isConnected = false;
+    this.stopMonitoring();
   }
 }

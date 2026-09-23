@@ -55,6 +55,16 @@ export class Game {
     this.ctx = canvas.getContext('2d')!;
 
     this.terrain = new Terrain();
+    this.terrain.onCarve = (cx, cy, r) => {
+      if (this.mode === 'online_host') {
+        this.pendingNetEvents.push({
+          type: 'crater',
+          x: Math.round(cx),
+          y: Math.round(cy),
+          r: Math.round(r)
+        });
+      }
+    };
     this.particles = new ParticleManager();
     this.net = net;
 
@@ -232,15 +242,6 @@ export class Game {
       this.triggerScreenShake(8, proj.weapon.craterRadius * 0.25);
     }
 
-    // Add crater event to network queue
-    if (this.mode === 'online_host' && proj.weapon.craterRadius > 0) {
-      this.pendingNetEvents.push({
-        type: 'crater',
-        x: Math.round(proj.x),
-        y: Math.round(proj.y),
-        r: proj.weapon.craterRadius
-      });
-    }
 
     // Cluster bomb explosion splits into sub-clusters!
     if (proj.weapon.splitCount && !proj.isSubCluster) {
@@ -277,18 +278,28 @@ export class Game {
     }
 
     if (this.mode === 'online_client') {
-      // Client sends inputs to host at 30Hz to prevent packet buffering
-      this.clientInputTimer = (this.clientInputTimer || 0) + 1;
-      if (this.clientInputTimer >= 2) {
-        this.clientInputTimer = 0;
-        this.net.broadcast({
-          type: 'INPUT',
-          seq: this.netSeq++,
-          input: this.localP1Input
-        });
+      // 1. Broadcast local inputs to host at 60Hz for immediate reaction
+      this.net.broadcast({
+        type: 'INPUT',
+        seq: this.netSeq++,
+        input: this.localP1Input
+      });
+
+      // 2. Client-side local prediction: simulate local worm physics, movement, and digging
+      const localWorm = this.getLocalWorm();
+      if (localWorm) {
+        localWorm.update(
+          this.localP1Input,
+          this.terrain,
+          this.particles,
+          () => {
+            // Weapon firing: recoil & audio trigger immediately inside worm.attemptFire().
+            // Authoritative projectiles are created on host and synchronized via STATE.
+          }
+        );
       }
 
-      // Update local particles
+      // 3. Update local particles
       this.particles.update(this.terrain);
       return;
     }
@@ -442,20 +453,51 @@ export class Game {
         this.particles.spawnGibs(worm.x, worm.y);
       }
 
-      // Smooth interpolation
-      worm.x = ws.x;
-      worm.y = ws.y;
-      worm.vx = ws.vx;
-      worm.vy = ws.vy;
-      worm.health = ws.health;
-      worm.frags = ws.frags;
-      worm.deaths = ws.deaths;
-      worm.facing = ws.facing;
-      worm.aimAngle = ws.aimAngle;
-      worm.currentWeaponIndex = ws.weaponIndex;
-      worm.rope.state = ws.ropeState;
-      worm.rope.hookX = ws.hookX;
-      worm.rope.hookY = ws.hookY;
+      if (worm.id === this.net.myPeerId) {
+        // Authoritative stats from host
+        worm.health = ws.health;
+        worm.frags = ws.frags;
+        worm.deaths = ws.deaths;
+
+        if (ws.health <= 0) {
+          worm.x = ws.x;
+          worm.y = ws.y;
+          worm.vx = ws.vx;
+          worm.vy = ws.vy;
+          worm.rope.release();
+        } else {
+          // Position reconciliation with host
+          const dx = ws.x - worm.x;
+          const dy = ws.y - worm.y;
+          const distSq = dx * dx + dy * dy;
+          if (distSq > 400) {
+            // Large drift (explosion knockback or teleport): snap
+            worm.x = ws.x;
+            worm.y = ws.y;
+            worm.vx = ws.vx;
+            worm.vy = ws.vy;
+          } else if (distSq > 4) {
+            // Smooth convergence
+            worm.x += dx * 0.25;
+            worm.y += dy * 0.25;
+          }
+        }
+      } else {
+        // Remote worm: direct sync from host
+        worm.x = ws.x;
+        worm.y = ws.y;
+        worm.vx = ws.vx;
+        worm.vy = ws.vy;
+        worm.health = ws.health;
+        worm.frags = ws.frags;
+        worm.deaths = ws.deaths;
+        worm.facing = ws.facing;
+        worm.aimAngle = ws.aimAngle;
+        worm.currentWeaponIndex = ws.weaponIndex;
+        worm.rope.state = ws.ropeState;
+        worm.rope.hookX = ws.hookX;
+        worm.rope.hookY = ws.hookY;
+      }
     }
 
     // 3. Synchronize projectiles

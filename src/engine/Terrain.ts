@@ -10,6 +10,7 @@ export class Terrain {
   public dirtCtx: CanvasRenderingContext2D;
   public rockCanvas: HTMLCanvasElement;
   public rockCtx: CanvasRenderingContext2D;
+  public onCarve?: (cx: number, cy: number, radius: number) => void;
 
   constructor(width: number = CONFIG.MAP_WIDTH, height: number = CONFIG.MAP_HEIGHT) {
     this.width = width;
@@ -204,6 +205,8 @@ export class Terrain {
       this.dirtCtx.arc(cx, cy, radius, 0, Math.PI * 2);
       this.dirtCtx.fill();
       this.dirtCtx.restore();
+
+      this.onCarve?.(cx, cy, radius);
     }
 
     return modified;

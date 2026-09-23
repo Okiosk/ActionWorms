@@ -1,4 +1,5 @@
 import { Game } from './engine/Game';
+import { GameTicker } from './engine/GameTicker';
 import { NetworkManager } from './net/NetworkManager';
 import { HUD } from './ui/HUD';
 import { LobbyUI, normalizeRoomId } from './ui/LobbyUI';
@@ -205,15 +206,23 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Main 60 FPS Game Loop
-  function gameLoop() {
-    processLocalInputs();
-    game.update();
-    game.render();
-    hud.update(game);
+  // Unthrottled 60Hz physics and network ticker (runs in dedicated Web Worker, preventing background tab suspension)
+  const ticker = new GameTicker(() => {
+    if (game.isRunning) {
+      processLocalInputs();
+      game.update();
+    }
+  });
+  ticker.start();
 
-    requestAnimationFrame(gameLoop);
+  // Rendering loop (vsync tied to display refresh rate)
+  function renderLoop() {
+    if (game.isRunning) {
+      game.render();
+      hud.update(game);
+    }
+    requestAnimationFrame(renderLoop);
   }
 
-  requestAnimationFrame(gameLoop);
+  requestAnimationFrame(renderLoop);
 });

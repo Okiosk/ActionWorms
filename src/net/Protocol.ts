@@ -63,4 +63,12 @@ export type NetMessage =
   | {
       type: 'MATCH_OVER';
       winnerId: string;
+    }
+  | {
+      type: 'PING';
+      time: number;
+    }
+  | {
+      type: 'PONG';
+      time: number;
     };
