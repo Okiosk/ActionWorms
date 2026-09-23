@@ -78,3 +78,21 @@ npm run dev
 npm run build
 ```
 Accédez ensuite à `http://localhost:3000` dans votre navigateur.
+
+---
+
+## 🚀 Déploiement sur GitHub Pages
+
+### Méthode Automatique (Recommandée - GitHub Actions)
+1. Poussez vos modifications sur la branche `main` (`git add .`, `git commit -m "Deploy"`, `git push`).
+2. Sur votre dépôt GitHub, allez dans **Settings > Pages**.
+3. Sous **Build and deployment > Source**, sélectionnez **GitHub Actions**.
+4. Le workflow se lance automatiquement et le site sera accessible en quelques secondes sur :
+   `https://okiosk.github.io/ActionWorms/`
+
+### Méthode Directe (gh-pages)
+Vous pouvez également publier directement en ligne de commande :
+```bash
+npm run deploy
+```
+Puis dans **Settings > Pages > Source**, choisissez la branche `gh-pages` et dossier `/ (root)`.
