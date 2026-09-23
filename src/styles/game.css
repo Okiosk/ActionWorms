@@ -1,0 +1,630 @@
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap');
+
+:root {
+  --bg-color: #0b0705;
+  --panel-bg: rgba(22, 14, 10, 0.94);
+  --panel-border: #4d301f;
+  --accent-gold: #ffb833;
+  --accent-green: #3cd070;
+  --accent-red: #ff3344;
+  --accent-blue: #3399ff;
+  --text-primary: #f2ece4;
+  --text-muted: #a69888;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+}
+
+body, html {
+  width: 100%;
+  height: 100%;
+  background-color: var(--bg-color);
+  font-family: 'VT323', monospace;
+  font-size: 20px;
+  color: var(--text-primary);
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* Game Wrapper */
+#app {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: radial-gradient(circle at center, #1f140e 0%, #080504 100%);
+}
+
+.canvas-container {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  max-width: 100vw;
+  max-height: 100vh;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: hidden;
+  display: flex;
+}
+
+#game-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+  background-color: #160d08;
+  object-fit: fill;
+}
+
+/* Subtle Retro CRT Scanlines Effect */
+.scanlines {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    rgba(18, 16, 16, 0) 50%, 
+    rgba(0, 0, 0, 0.22) 50%
+  );
+  background-size: 100% 4px;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* HUD Overlay */
+#hud-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 10px 14px;
+}
+
+.hud-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  width: 100%;
+}
+
+.hud-player {
+  background: rgba(15, 10, 8, 0.75);
+  backdrop-filter: blur(2px);
+  border: 2px solid var(--panel-border);
+  border-radius: 4px;
+  padding: 6px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hud-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hud-name {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 10px;
+  color: var(--accent-gold);
+}
+
+.hud-bar-bg {
+  width: 120px;
+  height: 12px;
+  background: #2a1810;
+  border: 1px solid #5a3824;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.hud-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #22aa44, #33ff55);
+  transition: width 0.15s ease-out;
+}
+
+.hud-bar-fill.warning {
+  background: linear-gradient(90deg, #bb8800, #ffbb22);
+}
+
+.hud-bar-fill.critical {
+  background: linear-gradient(90deg, #991111, #ff2233);
+}
+
+.hud-hp-val {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 10px;
+  min-width: 32px;
+}
+
+.hud-frags {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 10px;
+  color: var(--accent-gold);
+}
+
+.hud-weapon-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 18px;
+  color: #fff;
+}
+
+.hud-weapon-active {
+  color: var(--accent-gold);
+}
+
+.hud-ammo-val {
+  font-size: 16px;
+}
+
+.hud-slots {
+  display: flex;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.hud-slot {
+  position: relative;
+  background: #20130d;
+  border: 1px solid #4d301f;
+  padding: 2px 5px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.6;
+}
+
+.hud-slot.active {
+  border-color: var(--accent-gold);
+  background: #3d2315;
+  opacity: 1;
+  box-shadow: 0 0 6px rgba(255, 184, 51, 0.4);
+}
+
+.slot-num {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.slot-icon {
+  font-size: 14px;
+}
+
+/* Center Kill Feed */
+.hud-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.hud-killfeed {
+  background: rgba(18, 10, 8, 0.85);
+  border: 1px solid var(--accent-red);
+  padding: 4px 14px;
+  border-radius: 4px;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  color: #ff9999;
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: all 0.2s ease-out;
+}
+
+.hud-killfeed.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.btn-fullscreen {
+  pointer-events: auto;
+  margin-top: 6px;
+  background: rgba(22, 14, 10, 0.75);
+  border: 1px solid var(--panel-border);
+  color: var(--accent-gold);
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-fullscreen:hover {
+  background: #3d2315;
+  border-color: var(--accent-gold);
+  color: #fff;
+}
+
+.hud-controls-hint {
+  align-self: center;
+  background: rgba(10, 6, 4, 0.8);
+  border: 1px solid #331f14;
+  border-radius: 4px;
+  padding: 3px 12px;
+  font-size: 16px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* Menus & Modals Overlay */
+#menu-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(6, 4, 3, 0.82);
+  backdrop-filter: blur(4px);
+  z-index: 20;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.menu-card {
+  background: var(--panel-bg);
+  border: 3px solid var(--panel-border);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.9), 0 0 15px rgba(255, 140, 40, 0.15);
+  border-radius: 8px;
+  padding: 24px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  max-width: 600px;
+  width: 90%;
+  text-align: center;
+}
+
+.game-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 32px;
+  color: var(--accent-gold);
+  text-shadow: 3px 3px 0px #803000, 0 0 20px rgba(255, 160, 40, 0.6);
+  letter-spacing: 2px;
+}
+
+.subtitle {
+  font-size: 20px;
+  color: var(--text-muted);
+}
+
+.menu-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.btn {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 12px;
+  padding: 12px 18px;
+  border-radius: 4px;
+  border: 2px solid;
+  cursor: pointer;
+  transition: all 0.1s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.btn:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.2);
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn-primary {
+  background: #a63e00;
+  border-color: #ff7722;
+  color: #fff;
+  box-shadow: 0 4px 0 #5c2000;
+}
+
+.btn-secondary {
+  background: #2a3a52;
+  border-color: #4a6a96;
+  color: #fff;
+  box-shadow: 0 4px 0 #182232;
+}
+
+.btn-accent {
+  background: #1c5e32;
+  border-color: #3cd070;
+  color: #fff;
+  box-shadow: 0 4px 0 #0f381c;
+}
+
+.btn-join {
+  background: #603813;
+  border-color: #9c602a;
+  color: #fff;
+  padding: 8px 14px;
+  font-size: 11px;
+}
+
+.btn-sm {
+  font-size: 10px;
+  padding: 8px 12px;
+}
+
+.btn-text {
+  background: none;
+  border: none;
+  font-family: 'VT323', monospace;
+  font-size: 18px;
+  color: var(--accent-gold);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.btn-text:hover {
+  color: #fff;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  margin: 6px 0;
+  color: #7a5035;
+  font-size: 14px;
+}
+
+.divider::before, .divider::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid #422514;
+}
+
+.divider span {
+  padding: 0 8px;
+}
+
+.join-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.join-row input {
+  flex: 1;
+  background: #180e08;
+  border: 2px solid #5a3824;
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-family: 'VT323', monospace;
+  font-size: 20px;
+  color: #fff;
+  outline: none;
+}
+
+.join-row input:focus {
+  border-color: var(--accent-gold);
+}
+
+.loadout-preview {
+  width: 100%;
+  background: rgba(14, 9, 6, 0.6);
+  border: 1px solid #3d2417;
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+.loadout-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 18px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.loadout-icons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.loadout-icon-badge {
+  background: #24160e;
+  border: 1px solid #54331e;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.footer-tip {
+  font-size: 16px;
+  color: #8c7360;
+}
+
+/* Weapon Selection Modal */
+.weapon-select-card {
+  max-width: 760px;
+}
+
+.weapon-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  width: 100%;
+  max-height: 52vh;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.weapon-card {
+  background: #1a100a;
+  border: 2px solid #4a2f1d;
+  border-radius: 6px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.weapon-card:hover {
+  border-color: #8c5535;
+  background: #251710;
+}
+
+.weapon-card.selected {
+  border-color: var(--accent-gold);
+  background: #331d10;
+  box-shadow: 0 0 10px rgba(255, 184, 51, 0.25);
+}
+
+.weapon-card-icon {
+  font-size: 28px;
+}
+
+.weapon-card-body {
+  flex: 1;
+}
+
+.weapon-card-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 11px;
+  color: var(--accent-gold);
+  margin-bottom: 3px;
+}
+
+.weapon-card-desc {
+  font-size: 16px;
+  color: var(--text-muted);
+  line-height: 1.1;
+  margin-bottom: 4px;
+}
+
+.weapon-card-stats {
+  font-size: 15px;
+  color: #7bc47f;
+  display: flex;
+  gap: 12px;
+}
+
+.weapon-check {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 14px;
+  color: var(--accent-green);
+  min-width: 20px;
+}
+
+.weapon-select-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  margin-top: 10px;
+}
+
+/* Lobby Modal */
+.room-code-box {
+  background: #140d08;
+  border: 2px dashed #6b4025;
+  border-radius: 6px;
+  padding: 14px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.room-label {
+  font-size: 18px;
+  color: var(--text-muted);
+}
+
+.room-code-val {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 20px;
+  color: var(--accent-gold);
+  letter-spacing: 2px;
+}
+
+.connection-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgba(255, 184, 51, 0.2);
+  border-top-color: var(--accent-gold);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.status-badge.waiting {
+  background: #3d2a13;
+  color: #ffcc44;
+  border: 1px solid #735024;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 18px;
+}
+
+.share-hint {
+  font-size: 17px;
+  color: var(--text-muted);
+}
+
+/* Victory / Defeat */
+.victory-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 28px;
+  color: var(--accent-gold);
+  text-shadow: 0 0 20px rgba(255, 184, 51, 0.8);
+}
+
+.defeat-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 28px;
+  color: var(--accent-red);
+  text-shadow: 0 0 20px rgba(255, 51, 68, 0.8);
+}
