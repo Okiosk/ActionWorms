@@ -1,7 +1,7 @@
 import { Game } from './engine/Game';
 import { NetworkManager } from './net/NetworkManager';
 import { HUD } from './ui/HUD';
-import { LobbyUI } from './ui/LobbyUI';
+import { LobbyUI, normalizeRoomId } from './ui/LobbyUI';
 import { WeaponId } from './weapons/WeaponDef';
 import { DEFAULT_LOADOUT } from './weapons/WeaponRegistry';
 
@@ -138,29 +138,40 @@ window.addEventListener('DOMContentLoaded', () => {
       game.initMatch('online_host', loadout);
       return roomId;
     },
-    onJoinOnline: async (roomId, loadout) => {
+    onJoinOnline: async (rawRoomId, loadout) => {
+      const roomId = normalizeRoomId(rawRoomId);
       currentP1Loadout = loadout;
       await net.joinRoom(roomId);
       game.initMatch('online_client', loadout);
 
-      // Reliable handshake retry until WELCOME packet is confirmed
-      let welcomeReceived = false;
-      game.onWelcomeReceived = () => {
-        welcomeReceived = true;
-        lobby.hide();
-      };
+      // Return a Promise that resolves when WELCOME is received from Host
+      return new Promise<void>((resolve, reject) => {
+        let welcomeReceived = false;
 
-      const sendJoin = () => {
-        if (!welcomeReceived && net.isConnected) {
-          net.broadcast({
-            type: 'JOIN',
-            name: 'Invité',
-            loadout
-          });
-          setTimeout(sendJoin, 350);
-        }
-      };
-      sendJoin();
+        const timeout = setTimeout(() => {
+          if (!welcomeReceived) {
+            reject(new Error('Délai dépassé (8s) : L\'hôte n\'a pas répondu au handshake.'));
+          }
+        }, 8000);
+
+        game.onWelcomeReceived = () => {
+          welcomeReceived = true;
+          clearTimeout(timeout);
+          resolve();
+        };
+
+        const sendJoin = () => {
+          if (!welcomeReceived && net.isConnected) {
+            net.broadcast({
+              type: 'JOIN',
+              name: 'Invité',
+              loadout
+            });
+            setTimeout(sendJoin, 300);
+          }
+        };
+        sendJoin();
+      });
     },
     onRematch: () => {
       game.initMatch(game.mode, currentP1Loadout, currentP2Loadout);
@@ -187,8 +198,8 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // Check URL hash for direct room invite: #room=liero-xyz
   const hash = window.location.hash;
-  if (hash.startsWith('#room=')) {
-    const targetRoom = hash.replace('#room=', '').trim();
+  if (hash.includes('room=')) {
+    const targetRoom = normalizeRoomId(hash);
     if (targetRoom) {
       lobby.showConnectingModal(targetRoom);
     }

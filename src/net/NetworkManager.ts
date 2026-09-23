@@ -3,6 +3,22 @@ import { NetMessage } from './Protocol';
 
 export type NetRole = 'offline' | 'host' | 'client';
 
+const PEER_CONFIG = {
+  debug: 1,
+  config: {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun4.l.google.com:19302' },
+      { urls: 'stun:stun.services.mozilla.com' },
+      { urls: 'stun:global.stun.twilio.com:3478' }
+    ],
+    iceCandidatePoolSize: 10
+  }
+};
+
 export class NetworkManager {
   private peer: Peer | null = null;
   private connections: Map<string, DataConnection> = new Map();
@@ -26,13 +42,11 @@ export class NetworkManager {
     this.close();
 
     return new Promise((resolve, reject) => {
-      // Auto-generate clean 6-character room id if not given
-      const id = roomId || 'liero-' + Math.random().toString(36).substring(2, 8);
+      // Auto-generate clean 6-character room id in lowercase
+      const id = (roomId || 'liero-' + Math.random().toString(36).substring(2, 8)).toLowerCase();
 
       try {
-        this.peer = new Peer(id, {
-          debug: 1
-        });
+        this.peer = new Peer(id, PEER_CONFIG);
 
         this.peer.on('open', (assignedId) => {
           this.myPeerId = assignedId;
@@ -47,8 +61,12 @@ export class NetworkManager {
 
         this.peer.on('error', (err) => {
           console.error('PeerJS error:', err);
-          this.onError?.(err.message || 'Erreur réseau');
-          reject(err);
+          let errText = err.message || 'Erreur réseau';
+          if (err.type === 'unavailable-id') {
+            errText = 'Identifiant de salon déjà utilisé, réessayez.';
+          }
+          this.onError?.(errText);
+          reject(new Error(errText));
         });
       } catch (err: unknown) {
         const errorMsg = err instanceof Error ? err.message : String(err);
@@ -63,48 +81,77 @@ export class NetworkManager {
     this.role = 'client';
     this.close();
 
+    const cleanTarget = targetRoomId.toLowerCase().trim();
+
     return new Promise((resolve, reject) => {
+      let timeoutId: number | null = null;
+      let isSettled = false;
+
+      // 12-second timeout to prevent infinite spinner
+      timeoutId = window.setTimeout(() => {
+        if (!isSettled) {
+          isSettled = true;
+          this.close();
+          const err = new Error('Délai dépassé (12s) : Impossible de joindre l\'hôte. Vérifiez le code.');
+          this.onError?.(err.message);
+          reject(err);
+        }
+      }, 12000);
+
       try {
-        this.peer = new Peer({
-          debug: 1
-        });
+        this.peer = new Peer(PEER_CONFIG);
 
         this.peer.on('open', (id) => {
           this.myPeerId = id;
-          const conn = this.peer!.connect(targetRoomId, {
-            reliable: true
-          });
-
+          // Connect using native standard WebRTC DataChannel (reliable & ordered SCTP by default)
+          const conn = this.peer!.connect(cleanTarget);
           this.hostConnection = conn;
 
           conn.on('open', () => {
-            this.isConnected = true;
-            this.onConnected?.(targetRoomId);
-            resolve();
+            if (!isSettled) {
+              isSettled = true;
+              if (timeoutId) clearTimeout(timeoutId);
+              this.isConnected = true;
+              this.onConnected?.(cleanTarget);
+              resolve();
+            }
           });
 
           conn.on('data', (data) => {
-            this.onMessageReceived?.(data as NetMessage, targetRoomId);
+            this.onMessageReceived?.(data as NetMessage, cleanTarget);
           });
 
           conn.on('close', () => {
             this.isConnected = false;
-            this.onPeerLeft?.(targetRoomId);
+            this.onPeerLeft?.(cleanTarget);
           });
 
           conn.on('error', (err) => {
             console.error('Connection error:', err);
-            this.onError?.('Impossible de rejoindre la partie.');
-            reject(err);
+            if (!isSettled) {
+              isSettled = true;
+              if (timeoutId) clearTimeout(timeoutId);
+              this.onError?.('Impossible de rejoindre la partie.');
+              reject(err);
+            }
           });
         });
 
         this.peer.on('error', (err) => {
-          console.error('Peer error:', err);
-          this.onError?.('Erreur de connexion : ' + err.type);
-          reject(err);
+          console.error('Peer error on client:', err);
+          if (!isSettled) {
+            isSettled = true;
+            if (timeoutId) clearTimeout(timeoutId);
+            let msg = 'Erreur de connexion : ' + err.type;
+            if (err.type === 'peer-unavailable') {
+              msg = `Le salon "${cleanTarget}" est introuvable. Assurez-vous que l'hôte a bien créé la partie.`;
+            }
+            this.onError?.(msg);
+            reject(new Error(msg));
+          }
         });
       } catch (err: unknown) {
+        if (timeoutId) clearTimeout(timeoutId);
         const errorMsg = err instanceof Error ? err.message : String(err);
         this.onError?.(errorMsg);
         reject(err);
@@ -113,12 +160,18 @@ export class NetworkManager {
   }
 
   private setupHostConnection(conn: DataConnection) {
+    // Register connection immediately
+    this.connections.set(conn.peer, conn);
+
     conn.on('open', () => {
       this.connections.set(conn.peer, conn);
       this.onPeerJoined?.(conn.peer);
     });
 
     conn.on('data', (data) => {
+      if (!this.connections.has(conn.peer)) {
+        this.connections.set(conn.peer, conn);
+      }
       this.onMessageReceived?.(data as NetMessage, conn.peer);
     });
 
@@ -138,7 +191,7 @@ export class NetworkManager {
   public broadcast(msg: NetMessage) {
     if (this.role === 'host') {
       for (const conn of this.connections.values()) {
-        if (conn.open) {
+        if (conn && conn.open) {
           conn.send(msg);
         }
       }
@@ -149,8 +202,17 @@ export class NetworkManager {
 
   public sendTo(peerId: string, msg: NetMessage) {
     const conn = this.connections.get(peerId);
-    if (conn && conn.open) {
+    if (!conn) {
+      console.warn(`sendTo: No connection found for peer ${peerId}`);
+      return;
+    }
+    if (conn.open) {
       conn.send(msg);
+    } else {
+      // If not yet fully open, queue to send upon open
+      conn.on('open', () => {
+        conn.send(msg);
+      });
     }
   }
 

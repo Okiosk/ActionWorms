@@ -11,6 +11,16 @@ export interface LobbyCallbacks {
   onReturnToMenu: () => void;
 }
 
+export function normalizeRoomId(raw: string): string {
+  let id = (raw || '').trim();
+  if (id.includes('#room=')) {
+    id = id.split('#room=')[1];
+  } else if (id.includes('room=')) {
+    id = id.split('room=')[1];
+  }
+  return id.split('&')[0].split('?')[0].split('/')[0].trim().toLowerCase();
+}
+
 export class LobbyUI {
   private container: HTMLElement;
   private callbacks: LobbyCallbacks;
@@ -36,7 +46,7 @@ export class LobbyUI {
           <div class="divider"><span>EN LIGNE (PEER-TO-PEER)</span></div>
           <button class="btn btn-accent" id="btn-host">🌐 Créer un Salon P2P (Hôte)</button>
           <div class="join-row">
-            <input type="text" id="input-room-code" placeholder="Code du salon (ex: liero-xxx)" />
+            <input type="text" id="input-room-code" placeholder="Code du salon ou lien complet" />
             <button class="btn btn-join" id="btn-join">Rejoindre</button>
           </div>
         </div>
@@ -73,9 +83,9 @@ export class LobbyUI {
 
     this.container.querySelector('#btn-join')?.addEventListener('click', async () => {
       const input = this.container.querySelector('#input-room-code') as HTMLInputElement;
-      const code = input.value.trim();
+      const code = normalizeRoomId(input.value);
       if (!code) {
-        alert('Veuillez entrer un code de salon.');
+        alert('Veuillez entrer un code de salon valide (ex: liero-xxxx).');
         return;
       }
       this.showConnectingModal(code);
@@ -217,7 +227,9 @@ export class LobbyUI {
     }
   }
 
-  public async showConnectingModal(roomId: string) {
+  public async showConnectingModal(rawRoomId: string) {
+    const roomId = normalizeRoomId(rawRoomId);
+    this.container.style.display = 'flex';
     this.container.innerHTML = `
       <div class="menu-card lobby-card">
         <h2>Connexion au Salon</h2>
@@ -225,7 +237,7 @@ export class LobbyUI {
 
         <div class="connection-status">
           <div class="spinner"></div>
-          <span>Établissement du tunnel WebRTC...</span>
+          <span id="client-connect-status">Établissement du tunnel WebRTC...</span>
         </div>
 
         <div class="menu-buttons">
@@ -240,6 +252,9 @@ export class LobbyUI {
     });
 
     try {
+      const statusText = this.container.querySelector('#client-connect-status');
+      if (statusText) statusText.textContent = 'Connexion à l\'hôte et synchronisation de la carte...';
+
       await this.callbacks.onJoinOnline(roomId, this.selectedLoadout);
       this.hide();
     } catch (err: unknown) {

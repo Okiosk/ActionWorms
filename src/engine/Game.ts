@@ -41,6 +41,7 @@ export class Game {
   // Network event queue (for Host to send to clients)
   private pendingNetEvents: NetEvent[] = [];
   private netSeq: number = 0;
+  private clientInputTimer: number = 0;
 
   // Callbacks for UI updates
   public onMatchEnd?: (winner: Worm) => void;
@@ -71,6 +72,18 @@ export class Game {
     this.net.onMessageReceived = (msg: NetMessage, fromId: string) => {
       if (this.mode === 'online_host') {
         if (msg.type === 'INPUT') {
+          // If player was not yet added to host's worms, auto-register immediately
+          if (!this.worms.some(w => w.id === fromId)) {
+            this.addNetworkPlayer(fromId, 'Invité', DEFAULT_LOADOUT);
+            this.net.sendTo(fromId, {
+              type: 'WELCOME',
+              playerId: fromId,
+              mapSeed: this.mapSeed,
+              mapWidth: CONFIG.MAP_WIDTH,
+              mapHeight: CONFIG.MAP_HEIGHT,
+              fragLimit: this.fragLimit
+            });
+          }
           this.remoteInputs.set(fromId, msg.input);
         } else if (msg.type === 'JOIN') {
           this.addNetworkPlayer(fromId, msg.name, msg.loadout);
@@ -85,8 +98,10 @@ export class Game {
         }
       } else if (this.mode === 'online_client') {
         if (msg.type === 'WELCOME') {
-          this.mapSeed = msg.mapSeed;
-          this.terrain.generateMap(msg.mapSeed);
+          if (this.mapSeed !== msg.mapSeed) {
+            this.mapSeed = msg.mapSeed;
+            this.terrain.generateMap(msg.mapSeed);
+          }
           this.onWelcomeReceived?.();
         } else if (msg.type === 'STATE') {
           this.applyWorldState(msg);
@@ -148,8 +163,11 @@ export class Game {
       hostWorm.spawn(spawn.x, spawn.y);
       this.worms.push(hostWorm);
     } else if (mode === 'online_client') {
-      // Client Player: create local worm representation immediately so player inputs can be sent
+      // Client Player: create local worm representation with valid spawn so player inputs work immediately
+      this.terrain.generateMap(this.mapSeed);
       const clientWorm = new Worm(this.net.myPeerId, 'Moi', CONFIG.COLORS.WORM_P2, false, p1Loadout);
+      const spawn = this.terrain.findSpawnPoint();
+      clientWorm.spawn(spawn.x, spawn.y);
       this.worms.push(clientWorm);
     }
 
@@ -259,12 +277,16 @@ export class Game {
     }
 
     if (this.mode === 'online_client') {
-      // Client sends inputs to host at 60Hz
-      this.net.broadcast({
-        type: 'INPUT',
-        seq: this.netSeq++,
-        input: this.localP1Input
-      });
+      // Client sends inputs to host at 30Hz to prevent packet buffering
+      this.clientInputTimer = (this.clientInputTimer || 0) + 1;
+      if (this.clientInputTimer >= 2) {
+        this.clientInputTimer = 0;
+        this.net.broadcast({
+          type: 'INPUT',
+          seq: this.netSeq++,
+          input: this.localP1Input
+        });
+      }
 
       // Update local particles
       this.particles.update(this.terrain);
