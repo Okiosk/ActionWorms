@@ -23,8 +23,9 @@ export class NinjaRope {
     this.state = 'flying';
     this.hookX = originX;
     this.hookY = originY;
-    this.hookVx = Math.cos(angle) * CONFIG.ROPE_SPEED;
-    this.hookVy = Math.sin(angle) * CONFIG.ROPE_SPEED;
+    const speed = 15.5;
+    this.hookVx = Math.cos(angle) * speed;
+    this.hookVy = Math.sin(angle) * speed;
     this.length = 0;
     sound.playRopeShoot();
   }
@@ -41,7 +42,12 @@ export class NinjaRope {
     return this.state !== 'idle';
   }
 
-  public update(worm: { x: number; y: number; vx: number; vy: number }, terrain: Terrain, reelIn: boolean, reelOut: boolean) {
+  public update(
+    worm: { x: number; y: number; vx: number; vy: number },
+    terrain: Terrain,
+    reelIn: boolean,
+    reelOut: boolean
+  ) {
     if (this.state === 'idle') return;
 
     if (this.state === 'flying') {
@@ -63,52 +69,55 @@ export class NinjaRope {
         if (terrain.isSolid(this.hookX, this.hookY)) {
           // Latch onto terrain!
           this.state = 'attached';
-          this.length = Math.max(20, dist);
+          this.length = Math.max(22, dist);
           sound.playRopeLatch();
           return;
         }
       }
     } else if (this.state === 'attached') {
-      // If hook point was destroyed, detach rope
+      // If hook point was destroyed by explosion, detach rope
       if (!terrain.isSolid(this.hookX, this.hookY)) {
         this.release();
         return;
       }
 
-      // Reeling controls
+      // Vector from hook to worm
+      const hx = worm.x - this.hookX;
+      const hy = worm.y - this.hookY;
+      const dist = Math.hypot(hx, hy);
+      if (dist < 0.001) return;
+
+      const ox = hx / dist; // outward unit vector pointing from hook to worm
+      const oy = hy / dist;
+
+      // 1. Cable Winch Pull: actively pull the worm toward the hook
+      const pullForce = reelIn ? 0.45 : 0.22;
+      worm.vx -= ox * pullForce;
+      worm.vy -= oy * pullForce;
+
+      // 2. Shorten/Lengthen cable
       if (reelIn) {
-        this.length = Math.max(16, this.length - 3.8);
+        this.length = Math.max(18, this.length - 3.2);
       } else if (reelOut) {
-        this.length = Math.min(this.maxLength, this.length + 3.2);
+        this.length = Math.min(this.maxLength, this.length + 3.0);
+      } else {
+        // Naturally track closer distance so worm climbs up smoothly
+        this.length = Math.max(18, Math.min(this.length, dist));
       }
 
-      // Pendulum rope physics constraint
-      const dx = worm.x - this.hookX;
-      const dy = worm.y - this.hookY;
-      const dist = Math.hypot(dx, dy);
-
-      if (dist > this.length && dist > 0.001) {
-        const nx = dx / dist;
-        const ny = dy / dist;
-
-        // Radial velocity of worm relative to hook
-        const radialVel = worm.vx * nx + worm.vy * ny;
-
-        // If stretching outward, pull back
-        if (radialVel > 0) {
-          worm.vx -= radialVel * nx * 0.95;
-          worm.vy -= radialVel * ny * 0.95;
+      // 3. Rigid Inelastic Distance Constraint:
+      // If worm reaches maximum cable length, cancel outward radial velocity and project position
+      if (dist >= this.length) {
+        const outwardVel = worm.vx * ox + worm.vy * oy;
+        if (outwardVel > 0) {
+          // Cancel outward component - preserves 100% of tangential swing velocity
+          worm.vx -= ox * outwardVel;
+          worm.vy -= oy * outwardVel;
         }
 
-        // Spring position restoration
-        const excess = dist - this.length;
-        const pull = excess * CONFIG.ROPE_PULL_FORCE;
-        worm.vx -= nx * pull;
-        worm.vy -= ny * pull;
-
-        // Tangential swinging damping
-        worm.vx *= CONFIG.ROPE_DAMPING;
-        worm.vy *= CONFIG.ROPE_DAMPING;
+        // Clamp worm distance exactly to cable length (prevents rubber-banding & jitter)
+        worm.x = this.hookX + ox * this.length;
+        worm.y = this.hookY + oy * this.length;
       }
     }
   }
@@ -117,17 +126,16 @@ export class NinjaRope {
     if (this.state === 'idle') return;
 
     ctx.save();
-    // Rope line
+    // Rope cable
     ctx.strokeStyle = '#cccccc';
-    ctx.lineWidth = 1.2;
-    ctx.setLineDash([3, 2]);
+    ctx.lineWidth = 1.3;
     ctx.beginPath();
     ctx.moveTo(wormX, wormY);
     ctx.lineTo(this.hookX, this.hookY);
     ctx.stroke();
 
     // Hook tip
-    ctx.fillStyle = this.state === 'attached' ? '#ff4444' : '#ffffff';
+    ctx.fillStyle = this.state === 'attached' ? '#ff3333' : '#ffffff';
     ctx.fillRect(this.hookX - 2, this.hookY - 2, 4, 4);
     ctx.restore();
   }

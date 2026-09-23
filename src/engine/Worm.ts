@@ -228,12 +228,45 @@ export class Worm {
     if (input.left) moveDir -= 1;
     if (input.right) moveDir += 1;
 
-    const wormSpeed = CONFIG.WORM_SPEED * this.modifiers.wormSpeed;
-    if (moveDir !== 0) {
-      if (input.aimAngle === undefined) {
-        this.facing = moveDir;
+    if (moveDir !== 0 && input.aimAngle === undefined) {
+      this.facing = moveDir;
+    }
+
+    const maxWalkSpeed = 1.7 * this.modifiers.wormSpeed;
+
+    if (this.rope.isAttached()) {
+      // Swing pumping while attached to ninja rope
+      if (moveDir !== 0) {
+        this.vx += moveDir * 0.25;
       }
-      this.vx += moveDir * (this.grounded ? wormSpeed : wormSpeed * 0.45);
+    } else if (this.grounded) {
+      // Ground movement: crisp acceleration capped at walking speed
+      if (moveDir !== 0) {
+        this.vx += moveDir * (0.44 * this.modifiers.wormSpeed);
+        this.vx = Math.max(-maxWalkSpeed, Math.min(maxWalkSpeed, this.vx));
+      }
+      this.vx *= CONFIG.GROUND_FRICTION;
+    } else {
+      // Air movement: gentle steering that NEVER exceeds walking speed
+      if (moveDir !== 0) {
+        if (moveDir > 0) {
+          if (this.vx < maxWalkSpeed) {
+            this.vx = Math.min(maxWalkSpeed, this.vx + 0.12 * this.modifiers.wormSpeed);
+          }
+        } else if (moveDir < 0) {
+          if (this.vx > -maxWalkSpeed) {
+            this.vx = Math.max(-maxWalkSpeed, this.vx - 0.12 * this.modifiers.wormSpeed);
+          }
+        }
+      }
+
+      // Air drag: high speeds (slingshot or explosion knockback) are preserved,
+      // while regular jump velocities decelerate smoothly if keys are released
+      if (Math.abs(this.vx) > maxWalkSpeed) {
+        this.vx *= 0.992;
+      } else if (moveDir === 0) {
+        this.vx *= 0.96;
+      }
     }
     this.isDigging = false;
 
@@ -241,13 +274,6 @@ export class Worm {
     if (input.jump && this.grounded && !this.rope.isAttached()) {
       this.vy = -CONFIG.WORM_JUMP_FORCE;
       this.grounded = false;
-    }
-
-    // Friction
-    if (this.grounded) {
-      this.vx *= CONFIG.GROUND_FRICTION;
-    } else {
-      this.vx *= CONFIG.AIR_FRICTION;
     }
 
     // Physics step & Slope climbing
