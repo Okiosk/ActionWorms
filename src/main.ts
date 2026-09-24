@@ -20,29 +20,24 @@ window.addEventListener('DOMContentLoaded', () => {
 
   let currentLoadout: WeaponId[] = [...DEFAULT_LOADOUT];
 
-  // Mouse aim coordinates
-  let mouseCanvasX = 0;
-  let mouseCanvasY = 0;
+  // Track raw mouse screen position (world coords computed per-frame via screenToWorld)
+  let mouseScreenX = 0;
+  let mouseScreenY = 0;
+
+  window.addEventListener('mousemove', (e) => {
+    mouseScreenX = e.clientX;
+    mouseScreenY = e.clientY;
+  });
+
   let isMouseDownLeft = false;
   let isMouseDownRight = false;
 
   // Prevent right-click context menu on canvas
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
-  // Track mouse coordinates mapped to 800x500 canvas resolution
-  window.addEventListener('mousemove', (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    mouseCanvasX = (e.clientX - rect.left) * scaleX;
-    mouseCanvasY = (e.clientY - rect.top) * scaleY;
-  });
-
   window.addEventListener('mousedown', (e) => {
-    if (e.target === canvas) {
-      if (e.button === 0) isMouseDownLeft = true;
-      if (e.button === 2) isMouseDownRight = true;
-    }
+    if (e.button === 0) isMouseDownLeft = true;
+    if (e.button === 2) isMouseDownRight = true;
   });
 
   window.addEventListener('mouseup', (e) => {
@@ -69,8 +64,6 @@ window.addEventListener('DOMContentLoaded', () => {
 
   window.addEventListener('keydown', (e) => {
     keys[e.code] = true;
-
-    // Number keys 1-5 for quick weapon select
     if (['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5'].includes(e.code)) {
       const slot = parseInt(e.code.replace('Digit', '')) - 1;
       game.localP1Input.weaponSlot = slot;
@@ -89,10 +82,11 @@ window.addEventListener('DOMContentLoaded', () => {
 
     const localWorm = game.getLocalWorm();
 
-    // Mouse Aim Angle relative to local worm
+    // Mouse Aim Angle: convert screen pixels → world coords via camera transform
     let p1AimAngle: number | undefined = undefined;
     if (localWorm && localWorm.isAlive()) {
-      p1AimAngle = Math.atan2(mouseCanvasY - localWorm.y, mouseCanvasX - localWorm.x);
+      const world = game.screenToWorld(mouseScreenX, mouseScreenY);
+      p1AimAngle = Math.atan2(world.y - localWorm.y, world.x - localWorm.x);
     }
 
     // Local Player Input (WASD / ZQSD / Arrow keys + Mouse)
@@ -205,9 +199,10 @@ window.addEventListener('DOMContentLoaded', () => {
   });
   ticker.start();
 
-  // Rendering loop
+  // Rendering loop (runs on requestAnimationFrame, decoupled from physics)
   function renderLoop() {
     if (game.isRunning) {
+      game.updateCamera(); // smooth camera follow (render-rate, not physics-rate)
       game.render();
       hud.update(game);
     }

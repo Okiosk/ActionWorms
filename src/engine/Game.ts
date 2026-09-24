@@ -43,6 +43,11 @@ export class Game {
   public shakeDuration: number = 0;
   public shakeIntensity: number = 0;
 
+  // Smooth camera following local player
+  public camX: number = 0;
+  public camY: number = 0;
+  public readonly camZoom: number = 2.5; // zoom multiplier
+
   // Local inputs
   public localP1Input: WormInput = { left: false, right: false, up: false, down: false, jump: false, fire: false, rope: false };
   public remoteInputs: Map<string, WormInput> = new Map();
@@ -60,9 +65,14 @@ export class Game {
 
   constructor(canvas: HTMLCanvasElement, net: NetworkManager) {
     this.canvas = canvas;
-    this.canvas.width = CONFIG.MAP_WIDTH;
-    this.canvas.height = CONFIG.MAP_HEIGHT;
+    // Canvas fills the screen; the camera transform handles world-space rendering
+    this.resizeCanvas();
+    window.addEventListener('resize', () => this.resizeCanvas());
     this.ctx = canvas.getContext('2d')!;
+
+    // Initialize camera to center of map
+    this.camX = CONFIG.MAP_WIDTH / 2;
+    this.camY = CONFIG.MAP_HEIGHT / 2;
 
     this.terrain = new Terrain();
     this.terrain.onCarve = (cx, cy, r) => {
@@ -79,6 +89,36 @@ export class Game {
     this.net = net;
 
     this.setupNetworkCallbacks();
+  }
+  public resizeCanvas() {
+    this.canvas.width = window.innerWidth;
+    this.canvas.height = window.innerHeight;
+  }
+
+  /**
+   * Convert screen pixel coordinates (e.g. mouse) to world coordinates,
+   * accounting for the current camera transform (zoom + pan).
+   */
+  public screenToWorld(screenX: number, screenY: number): { x: number; y: number } {
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    return {
+      x: (screenX - w / 2) / this.camZoom + this.camX,
+      y: (screenY - h / 2) / this.camZoom + this.camY
+    };
+  }
+
+  /** Smooth-follow the local player. Call once per render frame (not physics tick). */
+  public updateCamera(alpha: number = 0.10) {
+    const target = this.getLocalWorm();
+    if (!target || !target.isAlive()) return;
+    this.camX += (target.x - this.camX) * alpha;
+    this.camY += (target.y - this.camY) * alpha;
+    // Clamp so the camera never shows outside the map
+    const halfW = this.canvas.width / (2 * this.camZoom);
+    const halfH = this.canvas.height / (2 * this.camZoom);
+    this.camX = Math.max(halfW, Math.min(CONFIG.MAP_WIDTH - halfW, this.camX));
+    this.camY = Math.max(halfH, Math.min(CONFIG.MAP_HEIGHT - halfH, this.camY));
   }
 
   public getLocalWorm(): Worm | undefined {
@@ -612,31 +652,44 @@ export class Game {
   }
 
   public render() {
-    this.ctx.save();
+    const ctx = this.ctx;
+    const cw = this.canvas.width;
+    const ch = this.canvas.height;
 
-    // Screen Shake offset
+    // Clear entire screen
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, cw, ch);
+
+    ctx.save();
+
+    // Apply camera: translate to center, scale by zoom, then offset by cam position
+    ctx.translate(cw / 2, ch / 2);
+    ctx.scale(this.camZoom, this.camZoom);
+    ctx.translate(-this.camX, -this.camY);
+
+    // Screen shake: applied as a small sub-pixel jitter in world space
     if (this.shakeDuration > 0) {
-      const ox = (Math.random() - 0.5) * this.shakeIntensity;
-      const oy = (Math.random() - 0.5) * this.shakeIntensity;
-      this.ctx.translate(ox, oy);
+      const ox = (Math.random() - 0.5) * this.shakeIntensity / this.camZoom;
+      const oy = (Math.random() - 0.5) * this.shakeIntensity / this.camZoom;
+      ctx.translate(ox, oy);
     }
 
     // 1. Draw Terrain (dirt, rock, cavern sky)
-    this.terrain.draw(this.ctx);
+    this.terrain.draw(ctx);
 
     // 2. Draw Particles (blood, smoke, sparks)
-    this.particles.draw(this.ctx);
+    this.particles.draw(ctx);
 
     // 3. Draw Projectiles
     for (const proj of this.projectiles) {
-      proj.draw(this.ctx);
+      proj.draw(ctx);
     }
 
     // 4. Draw Worms (all up to 8 worms)
     for (const worm of this.worms) {
-      worm.draw(this.ctx);
+      worm.draw(ctx);
     }
 
-    this.ctx.restore();
+    ctx.restore();
   }
 }

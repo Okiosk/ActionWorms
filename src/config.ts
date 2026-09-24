@@ -4,14 +4,14 @@ export const CONFIG = {
   MAP_HEIGHT: 500,
 
   // Physics constants (tuned for agile, responsive movement & slingshot swings)
-  GRAVITY: 0.18,
+  GRAVITY: 0.14,
   AIR_FRICTION: 0.992,
-  GROUND_FRICTION: 0.74,
+  GROUND_FRICTION: 0.72,
   WORM_SPEED: 0.45,
-  WORM_JUMP_FORCE: 3.4,
+  WORM_JUMP_FORCE: 2.8,
   DIG_RADIUS: 5,
   DIG_SPEED_FACTOR: 0.65,
-  MAX_FALL_SPEED: 7.0,
+  MAX_FALL_SPEED: 5.5,
 
   // Rope constants
   ROPE_SPEED: 14.5,

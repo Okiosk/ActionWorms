@@ -229,17 +229,17 @@ export class Worm {
       this.facing = moveDir;
     }
 
-    const maxWalkSpeed = 1.7 * this.modifiers.wormSpeed;
+    const maxWalkSpeed = 1.2 * this.modifiers.wormSpeed;
 
     if (this.rope.isAttached()) {
       // Swing pumping while attached to ninja rope
       if (moveDir !== 0) {
-        this.vx += moveDir * 0.25;
+        this.vx += moveDir * 0.18;
       }
     } else if (this.grounded) {
       // Ground movement: crisp acceleration capped at walking speed
       if (moveDir !== 0) {
-        this.vx += moveDir * (0.44 * this.modifiers.wormSpeed);
+        this.vx += moveDir * (0.32 * this.modifiers.wormSpeed);
         this.vx = Math.max(-maxWalkSpeed, Math.min(maxWalkSpeed, this.vx));
       }
       this.vx *= CONFIG.GROUND_FRICTION;
@@ -248,11 +248,11 @@ export class Worm {
       if (moveDir !== 0) {
         if (moveDir > 0) {
           if (this.vx < maxWalkSpeed) {
-            this.vx = Math.min(maxWalkSpeed, this.vx + 0.12 * this.modifiers.wormSpeed);
+            this.vx = Math.min(maxWalkSpeed, this.vx + 0.08 * this.modifiers.wormSpeed);
           }
         } else if (moveDir < 0) {
           if (this.vx > -maxWalkSpeed) {
-            this.vx = Math.max(-maxWalkSpeed, this.vx - 0.12 * this.modifiers.wormSpeed);
+            this.vx = Math.max(-maxWalkSpeed, this.vx - 0.08 * this.modifiers.wormSpeed);
           }
         }
       }
