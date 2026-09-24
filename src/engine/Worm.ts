@@ -439,19 +439,47 @@ export class Worm {
       }
     }
 
-    // 3. Rope distance constraint post-movement (safe projection)
+    // 3. Rope distance constraint post-movement via CCD stepped projection
+    // Instead of a single teleport snap (which can tunnel through walls), move
+    // incrementally toward the constraint point so the perimeter checks catch walls.
     if (this.rope.isAttached()) {
       const hx = this.x - this.rope.hookX;
       const hy = this.y - this.rope.hookY;
       const dist = Math.hypot(hx, hy);
-      if (dist > this.rope.length + 0.5) {
+      const slack = dist - this.rope.length;
+      if (slack > 0.5) {
         const ox = hx / dist;
         const oy = hy / dist;
-        const targetX = this.rope.hookX + ox * this.rope.length;
-        const targetY = this.rope.hookY + oy * this.rope.length;
-        if (!terrain.isSolid(targetX, targetY) && !terrain.isSolid(targetX, targetY + 4.5)) {
-          this.x = targetX;
-          this.y = targetY;
+        // Move in small steps toward the constraint point
+        const stepSize = 1.5;
+        const snapSteps = Math.ceil(slack / stepSize);
+        const snapDx = -ox * slack / snapSteps;
+        const snapDy = -oy * slack / snapSteps;
+        for (let i = 0; i < snapSteps; i++) {
+          const nx = this.x + snapDx;
+          const ny = this.y + snapDy;
+          // Check horizontal move
+          const hBlocked =
+            terrain.isSolid(nx + Math.sign(snapDx) * 4.8, this.y) ||
+            terrain.isSolid(nx + Math.sign(snapDx) * 3.5, this.y - 3.5) ||
+            terrain.isSolid(nx + Math.sign(snapDx) * 3.5, this.y + 1.8);
+          if (!hBlocked || Math.abs(snapDx) < 0.01) this.x = nx;
+          // Check vertical move
+          if (snapDy > 0) {
+            const feetY = this.y + snapDy + 5.0;
+            const vBlocked =
+              terrain.isSolid(this.x, feetY) ||
+              terrain.isSolid(this.x - 3.2, feetY - 0.5) ||
+              terrain.isSolid(this.x + 3.2, feetY - 0.5);
+            if (!vBlocked) this.y = this.y + snapDy;
+          } else if (snapDy < 0) {
+            const headY = this.y + snapDy - 5.0;
+            const vBlocked =
+              terrain.isSolid(this.x, headY) ||
+              terrain.isSolid(this.x - 3.2, headY + 0.5) ||
+              terrain.isSolid(this.x + 3.2, headY + 0.5);
+            if (!vBlocked) this.y = this.y + snapDy;
+          }
         }
       }
     }

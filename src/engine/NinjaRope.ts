@@ -91,36 +91,32 @@ export class NinjaRope {
       const oy = hy / dist;
 
       // 1. Reeling controls:
-      // Z / W / Jump -> reelIn (shorten cable, pull inward toward hook)
-      // S / Down -> reelOut (lengthen cable, descend downward)
-      // Idle -> cable length stays strictly fixed, pure pendulum swing!
+      // Z / W / Jump -> reelIn (shorten cable, pull inward)
+      // S / Down      -> reelOut (lengthen cable, descend)
+      // Idle          -> cable length strictly fixed, pure pendulum swing
       if (reelIn) {
-        this.length = Math.max(16, this.length - 2.8);
-        worm.vx -= ox * 0.38;
-        worm.vy -= oy * 0.38;
+        this.length = Math.max(16, this.length - 2.0);
       } else if (reelOut) {
-        this.length = Math.min(this.maxLength, this.length + 2.8);
-        worm.vx += ox * 0.12;
-        worm.vy += oy * 0.12;
+        this.length = Math.min(this.maxLength, this.length + 2.0);
       }
 
-      // 2. Rigid Inelastic Distance Constraint:
-      // If worm reaches or exceeds cable length, cancel outward radial velocity
-      if (dist >= this.length) {
+      // 2. Rigid Inelastic Distance Constraint (no teleport, velocity-only):
+      // If worm is beyond the cable length, cancel outward radial velocity.
+      // DO NOT project position here — let resolvePhysics handle movement so
+      // the CCD sub-stepping prevents wall clipping.
+      if (dist > this.length) {
         const outwardVel = worm.vx * ox + worm.vy * oy;
         if (outwardVel > 0) {
-          // Cancel outward component - preserves 100% of tangential swing velocity
+          // Cancel radial component, preserving 100% of tangential swing speed
           worm.vx -= ox * outwardVel;
           worm.vy -= oy * outwardVel;
         }
-
-        // Clamp worm distance to cable length without teleporting inside solid terrain
-        const targetX = this.hookX + ox * this.length;
-        const targetY = this.hookY + oy * this.length;
-        if (!terrain.isSolid(targetX, targetY)) {
-          worm.x = targetX;
-          worm.y = targetY;
-        }
+        // Apply a gentle restoring impulse proportional to over-extension
+        // (acts like a stiff spring rather than a hard snap, eliminating bounce)
+        const overExtension = dist - this.length;
+        const restoreStrength = Math.min(0.6, overExtension * 0.08);
+        worm.vx -= ox * restoreStrength;
+        worm.vy -= oy * restoreStrength;
       }
     }
   }
