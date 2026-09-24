@@ -46,7 +46,7 @@ export class Game {
   // Smooth camera following local player
   public camX: number = 0;
   public camY: number = 0;
-  public readonly camZoom: number = 2.5; // zoom multiplier
+  public readonly camZoom: number = 3.5; // zoom multiplier
 
   // Local inputs
   public localP1Input: WormInput = { left: false, right: false, up: false, down: false, jump: false, fire: false, rope: false };
@@ -119,6 +119,113 @@ export class Game {
     const halfH = this.canvas.height / (2 * this.camZoom);
     this.camX = Math.max(halfW, Math.min(CONFIG.MAP_WIDTH - halfW, this.camX));
     this.camY = Math.max(halfH, Math.min(CONFIG.MAP_HEIGHT - halfH, this.camY));
+  }
+
+  /** Convert world coordinates to screen pixel position. */
+  public worldToScreen(worldX: number, worldY: number): { x: number; y: number } {
+    const cw = this.canvas.width;
+    const ch = this.canvas.height;
+    return {
+      x: (worldX - this.camX) * this.camZoom + cw / 2,
+      y: (worldY - this.camY) * this.camZoom + ch / 2
+    };
+  }
+
+  /**
+   * Draw off-screen indicators (arrows on screen edge) for every remote worm
+   * that is alive but not currently visible inside the camera viewport.
+   * Called AFTER ctx.restore() so it draws in pure screen space.
+   */
+  private drawOffScreenIndicators() {
+    const ctx = this.ctx;
+    const cw = this.canvas.width;
+    const ch = this.canvas.height;
+    const localWorm = this.getLocalWorm();
+    const margin = 30; // distance from screen edge
+    const arrowSize = 14;
+
+    for (const worm of this.worms) {
+      if (!worm.isAlive()) continue;
+      if (worm === localWorm) continue;
+
+      const { x: sx, y: sy } = this.worldToScreen(worm.x, worm.y);
+
+      // Is the worm already visible on screen? (with a generous worm-body margin)
+      const bodyR = worm.radius * this.camZoom + 4;
+      if (sx >= bodyR && sx <= cw - bodyR && sy >= bodyR && sy <= ch - bodyR) continue;
+
+      // Direction from screen center to the off-screen worm
+      const dx = sx - cw / 2;
+      const dy = sy - ch / 2;
+      const angle = Math.atan2(dy, dx);
+
+      // Find clamped position on screen edge
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      // Intersect ray from center with screen rectangle (shrunk by margin)
+      const hw = cw / 2 - margin;
+      const hh = ch / 2 - margin;
+      let t = Infinity;
+      if (Math.abs(cos) > 0.0001) t = Math.min(t, Math.abs(hw / cos));
+      if (Math.abs(sin) > 0.0001) t = Math.min(t, Math.abs(hh / sin));
+      const edgeX = cw / 2 + cos * t;
+      const edgeY = ch / 2 + sin * t;
+
+      // Distance in world units (for display)
+      const worldDist = Math.round(Math.hypot(worm.x - (localWorm?.x ?? this.camX), worm.y - (localWorm?.y ?? this.camY)));
+
+      ctx.save();
+      ctx.translate(edgeX, edgeY);
+      ctx.rotate(angle);
+
+      // Arrow body (filled triangle pointing toward worm)
+      ctx.beginPath();
+      ctx.moveTo(arrowSize, 0);
+      ctx.lineTo(-arrowSize * 0.6, -arrowSize * 0.55);
+      ctx.lineTo(-arrowSize * 0.6, arrowSize * 0.55);
+      ctx.closePath();
+      ctx.fillStyle = worm.color;
+      ctx.globalAlpha = 0.92;
+      ctx.fill();
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Colored dot (pulse)
+      ctx.globalAlpha = 1.0;
+      ctx.beginPath();
+      ctx.arc(-arrowSize * 0.6, 0, 4, 0, Math.PI * 2);
+      ctx.fillStyle = worm.color;
+      ctx.fill();
+
+      ctx.restore();
+
+      // Player name + distance label next to the arrow
+      ctx.save();
+      const labelOffset = arrowSize + 6;
+      const lx = edgeX + Math.cos(angle) * labelOffset;
+      const ly = edgeY + Math.sin(angle) * labelOffset;
+
+      // Keep label inside screen
+      const clampedLx = Math.max(60, Math.min(cw - 60, lx));
+      const clampedLy = Math.max(16, Math.min(ch - 8, ly));
+
+      ctx.font = 'bold 11px VT323, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      // Shadow
+      ctx.fillStyle = '#000000';
+      ctx.globalAlpha = 0.7;
+      ctx.fillText(`${worm.name}  ${worldDist}px`, clampedLx + 1, clampedLy + 1);
+
+      // Text
+      ctx.fillStyle = worm.color;
+      ctx.globalAlpha = 1.0;
+      ctx.fillText(`${worm.name}  ${worldDist}px`, clampedLx, clampedLy);
+
+      ctx.restore();
+    }
   }
 
   public getLocalWorm(): Worm | undefined {
@@ -691,5 +798,8 @@ export class Game {
     }
 
     ctx.restore();
+
+    // 5. Off-screen player indicators (drawn in screen space, after world transform is restored)
+    this.drawOffScreenIndicators();
   }
 }
