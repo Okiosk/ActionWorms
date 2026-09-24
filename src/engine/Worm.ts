@@ -211,17 +211,14 @@ export class Worm {
       }
     }
 
-    // Reeling controls when rope is attached
-    const reelIn = this.rope.isAttached() && (input.jump || (input.up && input.aimAngle !== undefined));
-    const reelOut = this.rope.isAttached() && (input.down && input.aimAngle !== undefined);
-    this.rope.update(this, terrain, reelIn, reelOut);
-
     // Gravity with modifier
     const effGravity = CONFIG.GRAVITY * this.modifiers.gravity;
     this.vy = Math.min(CONFIG.MAX_FALL_SPEED, this.vy + effGravity);
 
     // Ground & Dig check
-    this.grounded = terrain.isSolid(this.x, this.y + this.radius + 1);
+    this.grounded = terrain.isSolid(this.x, this.y + this.radius + 1) ||
+                    terrain.isSolid(this.x - 3, this.y + this.radius + 1) ||
+                    terrain.isSolid(this.x + 3, this.y + this.radius + 1);
 
     // Movement
     let moveDir = 0;
@@ -276,7 +273,12 @@ export class Worm {
       this.grounded = false;
     }
 
-    // Physics step & Slope climbing
+    // Reeling controls when rope is attached (Z/W/Jump to climb, S/Down to descend)
+    const reelIn = this.rope.isAttached() && (input.up || input.jump);
+    const reelOut = this.rope.isAttached() && input.down;
+    this.rope.update(this, terrain, reelIn, reelOut);
+
+    // Physics step & Slope climbing with Continuous Collision Detection
     this.resolvePhysics(terrain);
 
     // Firing Weapons
@@ -335,41 +337,122 @@ export class Worm {
   }
 
   private resolvePhysics(terrain: Terrain) {
-    // Sub-step movement to prevent clipping
-    const steps = 3;
+    // 1. Anti-embed safety: if worm center is inside solid terrain, nudge to safety
+    if (terrain.isSolid(this.x, this.y)) {
+      for (let offset = 1; offset <= 12; offset++) {
+        if (!terrain.isSolid(this.x, this.y - offset)) { this.y -= offset; break; }
+        if (!terrain.isSolid(this.x, this.y + offset)) { this.y += offset; break; }
+        if (!terrain.isSolid(this.x - offset, this.y)) { this.x -= offset; break; }
+        if (!terrain.isSolid(this.x + offset, this.y)) { this.x += offset; break; }
+      }
+    }
+
+    // 2. Continuous Collision Detection (CCD) with dynamic sub-stepping
+    // Maximum step distance is 1.5 pixels, making wall tunneling impossible even at high speed
+    const speed = Math.hypot(this.vx, this.vy);
+    const maxStep = 1.5;
+    const steps = Math.max(2, Math.ceil(speed / maxStep));
     const stepVx = this.vx / steps;
     const stepVy = this.vy / steps;
 
     for (let s = 0; s < steps; s++) {
-      // Move Horizontal
-      const targetX = this.x + stepVx;
-      if (!terrain.isSolid(targetX, this.y)) {
-        this.x = targetX;
-      } else {
-        // Try slope climbing (step up 1-4px)
-        let climbed = false;
-        for (let stepUp = 1; stepUp <= 4; stepUp++) {
-          if (!terrain.isSolid(targetX, this.y - stepUp)) {
-            this.x = targetX;
-            this.y -= stepUp;
-            climbed = true;
-            break;
+      // Horizontal movement
+      if (Math.abs(stepVx) > 0.0001) {
+        const targetX = this.x + stepVx;
+        const dirX = stepVx > 0 ? 1 : -1;
+        const rX = 4.8;
+
+        // Front perimeter points (chest, head, and lower body)
+        const isBlocked =
+          terrain.isSolid(targetX + dirX * rX, this.y) ||
+          terrain.isSolid(targetX + dirX * 3.5, this.y - 3.5) ||
+          terrain.isSolid(targetX + dirX * 3.5, this.y + 1.8);
+
+        if (!isBlocked) {
+          this.x = targetX;
+        } else {
+          // Slope climbing (step up 1 to 4px)
+          let climbed = false;
+          for (let stepUp = 1; stepUp <= 4; stepUp++) {
+            const testY = this.y - stepUp;
+            const headBlocked =
+              terrain.isSolid(targetX, testY - 5.0) ||
+              terrain.isSolid(targetX + dirX * 3.0, testY - 4.5);
+            const wallBlocked =
+              terrain.isSolid(targetX + dirX * rX, testY) ||
+              terrain.isSolid(targetX + dirX * 3.5, testY - 3.5);
+
+            if (!headBlocked && !wallBlocked) {
+              this.x = targetX;
+              this.y = testY;
+              climbed = true;
+              break;
+            }
+          }
+          if (!climbed) {
+            this.vx = 0;
           }
         }
-        if (!climbed) {
-          this.vx = 0;
+
+        // Downhill slope adherence when walking on ground
+        if (this.grounded && !this.rope.isAttached() && Math.abs(stepVx) > 0.0001) {
+          for (let stepDown = 1; stepDown <= 3; stepDown++) {
+            if (terrain.isSolid(this.x, this.y + 5.0 + stepDown)) {
+              this.y += stepDown;
+              break;
+            }
+          }
         }
       }
 
-      // Move Vertical
-      const targetY = this.y + stepVy;
-      if (!terrain.isSolid(this.x, targetY)) {
-        this.y = targetY;
-      } else {
-        if (this.vy > 0) {
-          this.grounded = true;
+      // Vertical movement
+      if (Math.abs(stepVy) > 0.0001) {
+        const targetY = this.y + stepVy;
+        if (stepVy > 0) {
+          // Moving down (feet)
+          const feetY = targetY + 5.0;
+          const hitGround =
+            terrain.isSolid(this.x, feetY) ||
+            terrain.isSolid(this.x - 3.2, feetY - 0.5) ||
+            terrain.isSolid(this.x + 3.2, feetY - 0.5);
+
+          if (!hitGround) {
+            this.y = targetY;
+          } else {
+            this.grounded = true;
+            this.vy = 0;
+          }
+        } else {
+          // Moving up (head)
+          const headY = targetY - 5.0;
+          const hitCeiling =
+            terrain.isSolid(this.x, headY) ||
+            terrain.isSolid(this.x - 3.2, headY + 0.5) ||
+            terrain.isSolid(this.x + 3.2, headY + 0.5);
+
+          if (!hitCeiling) {
+            this.y = targetY;
+          } else {
+            this.vy = Math.max(0, this.vy);
+          }
         }
-        this.vy = 0;
+      }
+    }
+
+    // 3. Rope distance constraint post-movement (safe projection)
+    if (this.rope.isAttached()) {
+      const hx = this.x - this.rope.hookX;
+      const hy = this.y - this.rope.hookY;
+      const dist = Math.hypot(hx, hy);
+      if (dist > this.rope.length + 0.5) {
+        const ox = hx / dist;
+        const oy = hy / dist;
+        const targetX = this.rope.hookX + ox * this.rope.length;
+        const targetY = this.rope.hookY + oy * this.rope.length;
+        if (!terrain.isSolid(targetX, targetY) && !terrain.isSolid(targetX, targetY + 4.5)) {
+          this.x = targetX;
+          this.y = targetY;
+        }
       }
     }
 

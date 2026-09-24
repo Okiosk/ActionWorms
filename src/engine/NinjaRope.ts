@@ -90,23 +90,22 @@ export class NinjaRope {
       const ox = hx / dist; // outward unit vector pointing from hook to worm
       const oy = hy / dist;
 
-      // 1. Cable Winch Pull: actively pull the worm toward the hook
-      const pullForce = reelIn ? 0.45 : 0.22;
-      worm.vx -= ox * pullForce;
-      worm.vy -= oy * pullForce;
-
-      // 2. Shorten/Lengthen cable
+      // 1. Reeling controls:
+      // Z / W / Jump -> reelIn (shorten cable, pull inward toward hook)
+      // S / Down -> reelOut (lengthen cable, descend downward)
+      // Idle -> cable length stays strictly fixed, pure pendulum swing!
       if (reelIn) {
-        this.length = Math.max(18, this.length - 3.2);
+        this.length = Math.max(16, this.length - 2.8);
+        worm.vx -= ox * 0.38;
+        worm.vy -= oy * 0.38;
       } else if (reelOut) {
-        this.length = Math.min(this.maxLength, this.length + 3.0);
-      } else {
-        // Naturally track closer distance so worm climbs up smoothly
-        this.length = Math.max(18, Math.min(this.length, dist));
+        this.length = Math.min(this.maxLength, this.length + 2.8);
+        worm.vx += ox * 0.12;
+        worm.vy += oy * 0.12;
       }
 
-      // 3. Rigid Inelastic Distance Constraint:
-      // If worm reaches maximum cable length, cancel outward radial velocity and project position
+      // 2. Rigid Inelastic Distance Constraint:
+      // If worm reaches or exceeds cable length, cancel outward radial velocity
       if (dist >= this.length) {
         const outwardVel = worm.vx * ox + worm.vy * oy;
         if (outwardVel > 0) {
@@ -115,9 +114,13 @@ export class NinjaRope {
           worm.vy -= oy * outwardVel;
         }
 
-        // Clamp worm distance exactly to cable length (prevents rubber-banding & jitter)
-        worm.x = this.hookX + ox * this.length;
-        worm.y = this.hookY + oy * this.length;
+        // Clamp worm distance to cable length without teleporting inside solid terrain
+        const targetX = this.hookX + ox * this.length;
+        const targetY = this.hookY + oy * this.length;
+        if (!terrain.isSolid(targetX, targetY)) {
+          worm.x = targetX;
+          worm.y = targetY;
+        }
       }
     }
   }
