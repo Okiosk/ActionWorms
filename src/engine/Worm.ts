@@ -172,6 +172,16 @@ export class Worm {
       return;
     }
 
+    // Reset grounded each frame — resolvePhysics will set it again accurately
+    const wasGrounded = this.grounded;
+    this.grounded = terrain.isSolid(this.x, this.y + this.radius + 1) ||
+                    terrain.isSolid(this.x - 3, this.y + this.radius + 1) ||
+                    terrain.isSolid(this.x + 3, this.y + this.radius + 1);
+    // Clamp downward velocity to 0 when landing to prevent accumulation
+    if (this.grounded && !wasGrounded && this.vy > 0) {
+      this.vy = 0;
+    }
+
     // Freeze effect: can't move or shoot while frozen
     if (this.freezeTimer > 0) {
       this.freezeTimer--;
@@ -231,14 +241,14 @@ export class Worm {
       }
     }
 
-    // Gravity with modifier
+    // Gravity with modifier — only apply if not grounded (prevents vy accumulation on ground)
     const effGravity = CONFIG.GRAVITY * this.modifiers.gravity;
-    this.vy = Math.min(CONFIG.MAX_FALL_SPEED, this.vy + effGravity);
-
-    // Ground & Dig check
-    this.grounded = terrain.isSolid(this.x, this.y + this.radius + 1) ||
-                    terrain.isSolid(this.x - 3, this.y + this.radius + 1) ||
-                    terrain.isSolid(this.x + 3, this.y + this.radius + 1);
+    if (!this.grounded) {
+      this.vy = Math.min(CONFIG.MAX_FALL_SPEED, this.vy + effGravity);
+    } else {
+      // Keep a small downward push to maintain ground contact on slopes
+      this.vy = Math.min(CONFIG.MAX_FALL_SPEED, Math.max(0, this.vy) + effGravity * 0.3);
+    }
 
     // Movement
     let moveDir = 0;
@@ -252,13 +262,14 @@ export class Worm {
     const maxWalkSpeed = 1.2 * this.modifiers.wormSpeed;
 
     if (this.rope.isAttached()) {
-      // Gentle swing pumping while attached to ninja rope (soft, controlled, not overpowered)
-      const maxSwingSpeed = 1.6 * this.modifiers.wormSpeed;
+      // Swing pumping: more force and higher cap for satisfying pendulum movement
+      const maxSwingSpeed = 2.4 * this.modifiers.wormSpeed;
       if (moveDir !== 0) {
-        this.vx += moveDir * (0.05 * this.modifiers.wormSpeed);
+        this.vx += moveDir * (0.11 * this.modifiers.wormSpeed);
         this.vx = Math.max(-maxSwingSpeed, Math.min(maxSwingSpeed, this.vx));
       }
-      this.vx *= 0.996;
+      // Very low air friction when swinging — preserve pendulum momentum
+      this.vx *= 0.999;
     } else if (this.grounded) {
       // Ground movement: crisp acceleration capped at walking speed
       if (moveDir !== 0) {

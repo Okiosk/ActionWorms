@@ -101,18 +101,13 @@ export class NinjaRope {
       }
 
       // 2. Rigid Inelastic Distance Constraint:
-      // Zero outward velocity when at or beyond rope length, preserving tangential pendulum momentum.
-      // Do NOT impart inward acceleration to vx/vy so the worm is never launched/propelled.
+      // Eliminate outward velocity when rope is taut (prevents stretching),
+      // but NEVER clamp inward/tangential velocity — that's the pendulum energy.
       const radialVel = worm.vx * ox + worm.vy * oy; // > 0 outward, < 0 inward
       if (dist >= this.length && radialVel > 0) {
+        // Only cancel the outward component, preserve tangential velocity
         worm.vx -= ox * radialVel;
         worm.vy -= oy * radialVel;
-      }
-      // If worm has inward radial speed exceeding reel speed, cap it to prevent launching
-      if (radialVel < -reelSpeed) {
-        const excessInward = -radialVel - reelSpeed;
-        worm.vx += ox * excessInward;
-        worm.vy += oy * excessInward;
       }
     }
   }
