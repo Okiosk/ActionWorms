@@ -6,6 +6,8 @@ import { NinjaRope } from './NinjaRope';
 import { ParticleManager } from './Particles';
 import { sound } from './SoundEffects';
 import { MatchModifiers, DEFAULT_MODIFIERS } from '../net/Protocol';
+import RAPIER from '@dimforge/rapier2d-compat';
+import { RapierWorld, pxToM, mToPx, DynamicEntityAABB } from '../physics/RapierWorld';
 
 export interface WormInput {
   left: boolean;
@@ -35,6 +37,11 @@ export class Worm {
   public radius: number = 5.5; // collision sphere
   public facing: number = 1; // 1 = right, -1 = left
   public aimAngle: number = 0; // radians
+
+  // Rapier Physics
+  public rapierBody?: RAPIER.RigidBody;
+  public rapierWorld?: RapierWorld;
+  public onDeathRagdoll?: (worm: Worm, knockX: number, knockY: number) => void;
 
   // State & Modifiers
   public modifiers: MatchModifiers = { ...DEFAULT_MODIFIERS };
@@ -121,6 +128,69 @@ export class Worm {
     this.selectWeapon((this.currentWeaponIndex - 1 + this.weapons.length) % this.weapons.length);
   }
 
+  public initRapier(rw: RapierWorld) {
+    this.rapierWorld = rw;
+    this.rope.setRapierWorld(rw);
+
+    if (this.rapierBody) {
+      try { rw.world.removeRigidBody(this.rapierBody); } catch {}
+      this.rapierBody = undefined;
+    }
+
+    const bodyDesc = rw.rapier.RigidBodyDesc.dynamic()
+      .setTranslation(pxToM(this.x), pxToM(this.y))
+      .lockRotations()
+      .setLinearDamping(0.2)
+      .setCcdEnabled(true);
+    this.rapierBody = rw.world.createRigidBody(bodyDesc);
+
+    const colDesc = rw.rapier.ColliderDesc.capsule(pxToM(2.5), pxToM(4.2))
+      .setFriction(0.4)
+      .setRestitution(0.05)
+      .setDensity(1.5);
+    rw.world.createCollider(colDesc, this.rapierBody);
+  }
+
+  public syncFromRapier(terrain: Terrain) {
+    if (!this.rapierBody || !this.isAlive()) return;
+
+    const pos = this.rapierBody.translation();
+    const vel = this.rapierBody.linvel();
+
+    this.x = mToPx(pos.x);
+    this.y = mToPx(pos.y);
+    this.vx = mToPx(vel.x) / 60;
+    this.vy = mToPx(vel.y) / 60;
+
+    // Boundaries
+    const clampedX = Math.max(14, Math.min(terrain.width - 14, this.x));
+    const clampedY = Math.max(14, Math.min(terrain.height - 14, this.y));
+    if (clampedX !== this.x || clampedY !== this.y) {
+      this.x = clampedX;
+      this.y = clampedY;
+      this.rapierBody.setTranslation({ x: pxToM(this.x), y: pxToM(this.y) }, true);
+    }
+
+    // Grounded check based on terrain pixels below the worm
+    this.grounded = terrain.isSolid(this.x, this.y + this.radius + 1) ||
+                    terrain.isSolid(this.x - 3, this.y + this.radius + 1) ||
+                    terrain.isSolid(this.x + 3, this.y + this.radius + 1);
+  }
+
+  public getAABB(): DynamicEntityAABB {
+    return { x: this.x, y: this.y, radius: 28 };
+  }
+
+  public destroy() {
+    this.rope.release();
+    if (this.rapierBody && this.rapierWorld) {
+      try {
+        this.rapierWorld.world.removeRigidBody(this.rapierBody);
+      } catch {}
+      this.rapierBody = undefined;
+    }
+  }
+
   public spawn(x: number, y: number) {
     this.x = x;
     this.y = y;
@@ -130,6 +200,12 @@ export class Worm {
     this.respawnTimer = 0;
     this.rope.release();
     this.resetAmmo();
+
+    if (this.rapierBody) {
+      this.rapierBody.setTranslation({ x: pxToM(x), y: pxToM(y) }, true);
+      this.rapierBody.setLinvel({ x: 0, y: 0 }, true);
+      this.rapierBody.setEnabled(true);
+    }
   }
 
   public isAlive(): boolean {
@@ -147,6 +223,10 @@ export class Worm {
     this.vx += knockX;
     this.vy += knockY;
 
+    if (this.rapierBody) {
+      this.rapierBody.applyImpulse({ x: pxToM(knockX * 45), y: pxToM(knockY * 45) }, true);
+    }
+
     if (amount > 0) {
       sound.playHurt();
     }
@@ -156,6 +236,14 @@ export class Worm {
       this.respawnTimer = CONFIG.RESPAWN_DELAY_FRAMES;
       this.rope.release();
       sound.playDie();
+
+      // Trigger ragdoll spawn in physics world!
+      if (this.rapierWorld) {
+        this.onDeathRagdoll?.(this, knockX, knockY);
+        if (this.rapierBody) {
+          this.rapierBody.setEnabled(false);
+        }
+      }
     }
   }
 
@@ -261,59 +349,86 @@ export class Worm {
 
     const maxWalkSpeed = 1.2 * this.modifiers.wormSpeed;
 
-    if (this.rope.isAttached()) {
-      // Swing pumping: more force and higher cap for satisfying pendulum movement
-      const maxSwingSpeed = 2.4 * this.modifiers.wormSpeed;
-      if (moveDir !== 0) {
-        this.vx += moveDir * (0.11 * this.modifiers.wormSpeed);
-        this.vx = Math.max(-maxSwingSpeed, Math.min(maxSwingSpeed, this.vx));
-      }
-      // Very low air friction when swinging — preserve pendulum momentum
-      this.vx *= 0.999;
-    } else if (this.grounded) {
-      // Ground movement: crisp acceleration capped at walking speed
-      if (moveDir !== 0) {
-        this.vx += moveDir * (0.32 * this.modifiers.wormSpeed);
-        this.vx = Math.max(-maxWalkSpeed, Math.min(maxWalkSpeed, this.vx));
-      }
-      this.vx *= CONFIG.GROUND_FRICTION;
-    } else {
-      // Air movement: gentle steering that NEVER exceeds walking speed
-      if (moveDir !== 0) {
-        if (moveDir > 0) {
-          if (this.vx < maxWalkSpeed) {
-            this.vx = Math.min(maxWalkSpeed, this.vx + 0.08 * this.modifiers.wormSpeed);
-          }
-        } else if (moveDir < 0) {
-          if (this.vx > -maxWalkSpeed) {
-            this.vx = Math.max(-maxWalkSpeed, this.vx - 0.08 * this.modifiers.wormSpeed);
-          }
+    if (this.rapierBody) {
+      const curVel = this.rapierBody.linvel();
+      const maxWalkM = pxToM(maxWalkSpeed * 60);
+
+      if (this.rope.isAttached()) {
+        // Swing pumping
+        if (moveDir !== 0) {
+          this.rapierBody.applyImpulse({ x: pxToM(moveDir * 0.12 * 60), y: 0 }, true);
+        }
+      } else if (this.grounded) {
+        // Ground walking: direct crisp velocity with friction
+        if (moveDir !== 0) {
+          this.rapierBody.setLinvel({ x: moveDir * maxWalkM, y: curVel.y }, true);
+        } else {
+          this.rapierBody.setLinvel({ x: curVel.x * 0.72, y: curVel.y }, true);
+        }
+      } else {
+        // Air steering
+        if (moveDir !== 0) {
+          this.rapierBody.applyImpulse({ x: pxToM(moveDir * 0.04 * 60), y: 0 }, true);
         }
       }
 
-      // Air drag: high speeds (slingshot or explosion knockback) are preserved,
-      // while regular jump velocities decelerate smoothly if keys are released
-      if (Math.abs(this.vx) > maxWalkSpeed) {
-        this.vx *= 0.992;
-      } else if (moveDir === 0) {
-        this.vx *= 0.96;
+      // Jump
+      if (input.jump && this.grounded && !this.rope.isAttached()) {
+        this.rapierBody.setLinvel({ x: curVel.x, y: pxToM(-CONFIG.WORM_JUMP_FORCE * 60) }, true);
+        this.grounded = false;
+      }
+    } else {
+      // Classic Movement Fallback
+      if (this.rope.isAttached()) {
+        const maxSwingSpeed = 2.4 * this.modifiers.wormSpeed;
+        if (moveDir !== 0) {
+          this.vx += moveDir * (0.11 * this.modifiers.wormSpeed);
+          this.vx = Math.max(-maxSwingSpeed, Math.min(maxSwingSpeed, this.vx));
+        }
+        this.vx *= 0.999;
+      } else if (this.grounded) {
+        if (moveDir !== 0) {
+          this.vx += moveDir * (0.32 * this.modifiers.wormSpeed);
+          this.vx = Math.max(-maxWalkSpeed, Math.min(maxWalkSpeed, this.vx));
+        }
+        this.vx *= CONFIG.GROUND_FRICTION;
+      } else {
+        if (moveDir !== 0) {
+          if (moveDir > 0) {
+            if (this.vx < maxWalkSpeed) {
+              this.vx = Math.min(maxWalkSpeed, this.vx + 0.08 * this.modifiers.wormSpeed);
+            }
+          } else if (moveDir < 0) {
+            if (this.vx > -maxWalkSpeed) {
+              this.vx = Math.max(-maxWalkSpeed, this.vx - 0.08 * this.modifiers.wormSpeed);
+            }
+          }
+        }
+
+        if (Math.abs(this.vx) > maxWalkSpeed) {
+          this.vx *= 0.992;
+        } else if (moveDir === 0) {
+          this.vx *= 0.96;
+        }
+      }
+
+      // Jump
+      if (input.jump && this.grounded && !this.rope.isAttached()) {
+        this.vy = -CONFIG.WORM_JUMP_FORCE;
+        this.grounded = false;
       }
     }
     this.isDigging = false;
-
-    // Jump
-    if (input.jump && this.grounded && !this.rope.isAttached()) {
-      this.vy = -CONFIG.WORM_JUMP_FORCE;
-      this.grounded = false;
-    }
 
     // Reeling controls when rope is attached (Z/W/Jump to climb, S/Down to descend)
     const reelIn = this.rope.isAttached() && (input.up || input.jump);
     const reelOut = this.rope.isAttached() && input.down;
     this.rope.update(this, terrain, reelIn, reelOut);
 
-    // Physics step & Slope climbing with Continuous Collision Detection
-    this.resolvePhysics(terrain);
+    // Physics step (only if not simulated by Rapier)
+    if (!this.rapierBody) {
+      this.resolvePhysics(terrain);
+    }
 
     // HP Regeneration (from modifiers) — regenRate is HP/second, game runs at 60fps
     if (this.modifiers.regenRate > 0 && this.isAlive()) {
@@ -354,6 +469,13 @@ export class Worm {
     const recoilForce = weapon.recoil;
     this.vx -= Math.cos(this.aimAngle) * recoilForce;
     this.vy -= Math.sin(this.aimAngle) * recoilForce;
+
+    if (this.rapierBody) {
+      this.rapierBody.applyImpulse({
+        x: pxToM(-Math.cos(this.aimAngle) * recoilForce * 40),
+        y: pxToM(-Math.sin(this.aimAngle) * recoilForce * 40)
+      }, true);
+    }
 
     // Play weapon sound
     if (weapon.id === 'bazooka') sound.playBazooka();
