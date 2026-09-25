@@ -90,33 +90,29 @@ export class NinjaRope {
       const ox = hx / dist; // outward unit vector pointing from hook to worm
       const oy = hy / dist;
 
-      // 1. Reeling controls (classic Liero speed):
-      // Z / Jump -> reelIn (climb up toward anchor)
-      // S / Down -> reelOut (descend)
-      const reelSpeed = 3.2;
+      // 1. Reeling controls:
+      // Z / Jump -> reelIn (climb up toward anchor smoothly at constant speed)
+      // S / Down -> reelOut (descend smoothly)
+      const reelSpeed = 1.7;
       if (reelIn) {
         this.length = Math.max(16, this.length - reelSpeed);
-        // Also impart an inward velocity impulse so climbing feels crisp and immediate
-        worm.vx -= ox * 0.8;
-        worm.vy -= oy * 0.8;
       } else if (reelOut) {
         this.length = Math.min(this.maxLength, this.length + reelSpeed);
       }
 
-      // 2. Rigid Inelastic Distance Constraint (authentic Liero pendulum):
-      // If worm is extended past current rope length, project radial velocity to 0
-      // and gently pull back to constraint boundary without oscillations
-      if (dist > this.length) {
-        const outwardVel = worm.vx * ox + worm.vy * oy;
-        if (outwardVel > 0) {
-          // Zero outward radial velocity, preserving 100% of tangential pendulum speed
-          worm.vx -= ox * outwardVel;
-          worm.vy -= oy * outwardVel;
-        }
-        // Direct correction along the line to maintain the exact rope radius
-        const overDist = dist - this.length;
-        worm.vx -= ox * Math.min(overDist * 0.4, 2.0);
-        worm.vy -= oy * Math.min(overDist * 0.4, 2.0);
+      // 2. Rigid Inelastic Distance Constraint:
+      // Zero outward velocity when at or beyond rope length, preserving tangential pendulum momentum.
+      // Do NOT impart inward acceleration to vx/vy so the worm is never launched/propelled.
+      const radialVel = worm.vx * ox + worm.vy * oy; // > 0 outward, < 0 inward
+      if (dist >= this.length && radialVel > 0) {
+        worm.vx -= ox * radialVel;
+        worm.vy -= oy * radialVel;
+      }
+      // If worm has inward radial speed exceeding reel speed, cap it to prevent launching
+      if (radialVel < -reelSpeed) {
+        const excessInward = -radialVel - reelSpeed;
+        worm.vx += ox * excessInward;
+        worm.vy += oy * excessInward;
       }
     }
   }

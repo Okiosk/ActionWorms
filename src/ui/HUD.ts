@@ -51,11 +51,6 @@ export class HUD {
         <!-- Multi-player Leaderboard (Right, up to 7 opponents) -->
         <div class="hud-scoreboard" id="hud-scoreboard"></div>
       </div>
-
-      <!-- Controls Quick Guide at bottom -->
-      <div class="hud-controls-hint" id="hud-controls-hint">
-        🎮 <b>Contrôles :</b> [Q / D] Déplacement | [Z / Espace] Sauter | [Souris / Visée] Tirer [Clic G] | [Clic D / E] Grappin | [1-5 / Molette] Armes | [⛶] Plein Écran
-      </div>
     `;
 
     this.container.querySelector('#btn-toggle-fullscreen')?.addEventListener('click', () => {

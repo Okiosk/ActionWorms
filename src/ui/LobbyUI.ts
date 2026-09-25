@@ -1,7 +1,36 @@
 import { ALL_WEAPON_IDS, WEAPON_REGISTRY, DEFAULT_LOADOUT } from '../weapons/WeaponRegistry';
 import { WeaponId } from '../weapons/WeaponDef';
-import { MatchModifiers, DEFAULT_MODIFIERS, LobbyPlayerInfo } from '../net/Protocol';
+import { MatchModifiers, DEFAULT_MODIFIERS, LobbyPlayerInfo, MapType } from '../net/Protocol';
 import { CONFIG } from '../config';
+import { Terrain } from '../engine/Terrain';
+
+export const MAP_METAS: Record<MapType, { name: string; icon: string; desc: string }> = {
+  cave: {
+    name: 'Cavernes',
+    icon: '🕳️',
+    desc: 'Tunnels sinueux et grandes cavernes forées dans la roche indestructible.'
+  },
+  volcano: {
+    name: 'Volcan',
+    icon: '🌋',
+    desc: 'Immense lac d’acide au fond, colonnes de roche et stalactites suspendues.'
+  },
+  swiss: {
+    name: 'Fromage Suisse',
+    icon: '🧀',
+    desc: 'Réseau dense de 40+ chambres circulaires autonomes à forer ou grappiner.'
+  },
+  fortress: {
+    name: 'Forteresse',
+    icon: '🏰',
+    desc: 'Étages fortifiés horizontaux, corridors et fossés d’acide piégés.'
+  },
+  open: {
+    name: 'Terrain Ouvert',
+    icon: '🌄',
+    desc: 'Surface vallonnée à ciel ouvert avec îles rocheuses flottantes.'
+  }
+};
 
 export interface LobbyCallbacks {
   onHostOnline: (name: string, loadout: WeaponId[], modifiers: MatchModifiers) => Promise<string>;
@@ -32,6 +61,7 @@ export class LobbyUI {
   public connectedPlayers: LobbyPlayerInfo[] = [];
   public currentRoomId: string = '';
   public isHost: boolean = false;
+  public previewSeed: number = Math.floor(Math.random() * 1000000);
 
   constructor(container: HTMLElement, callbacks: LobbyCallbacks) {
     this.container = container;
@@ -193,127 +223,154 @@ export class LobbyUI {
           </div>
         </div>
 
-        <!-- Modifiers Panel -->
-        <div class="lobby-section">
-          <div class="section-title">⚙️ Modificateurs de Partie (Règles Spéciales)</div>
-          <div class="modifiers-grid">
-            <div class="mod-item">
-              <label>🌍 Gravité</label>
-              <select id="mod-gravity">
-                <option value="1.0" ${this.modifiers.gravity === 1.0 ? 'selected' : ''}>Normale (1.0x)</option>
-                <option value="0.35" ${this.modifiers.gravity === 0.35 ? 'selected' : ''}>🌙 Lunaire (Basse - 0.35x)</option>
-                <option value="1.8" ${this.modifiers.gravity === 1.8 ? 'selected' : ''}>⚓ Élevée (1.8x)</option>
-                <option value="0.0" ${this.modifiers.gravity === 0.0 ? 'selected' : ''}>🚀 Zéro-G (Spatiale)</option>
-              </select>
-            </div>
+        <!-- Two Columns: Modifiers on Left, Map Selection + Preview on Right -->
+        <div class="lobby-columns">
+          <!-- LEFT COLUMN: Modificateurs -->
+          <div class="lobby-section column-modifiers">
+            <div class="section-title">⚙️ Règles & Modificateurs</div>
+            <div class="modifiers-grid">
+              <div class="mod-item">
+                <label>🎮 Mode de Jeu</label>
+                <select id="mod-gamemode">
+                  <option value="ffa" ${this.modifiers.gameMode === 'ffa' ? 'selected' : ''}>⚔️ Deathmatch (FFA)</option>
+                  <option value="teams" ${this.modifiers.gameMode === 'teams' ? 'selected' : ''}>👥 Équipes (2 teams)</option>
+                  <option value="koth" ${this.modifiers.gameMode === 'koth' ? 'selected' : ''}>👑 Roi de la Colline</option>
+                </select>
+              </div>
 
-            <div class="mod-item">
-              <label>🪢 Grappin Ninja</label>
-              <select id="mod-rope">
-                <option value="normal" ${this.modifiers.ropeReach === 'normal' ? 'selected' : ''}>Portée Normale (220px)</option>
-                <option value="infinite" ${this.modifiers.ropeReach === 'infinite' ? 'selected' : ''}>♾️ Portée Infinie</option>
-              </select>
-            </div>
+              <div class="mod-item">
+                <label>🌍 Gravité</label>
+                <select id="mod-gravity">
+                  <option value="1.0" ${this.modifiers.gravity === 1.0 ? 'selected' : ''}>Normale (1.0x)</option>
+                  <option value="0.35" ${this.modifiers.gravity === 0.35 ? 'selected' : ''}>🌙 Lunaire (0.35x)</option>
+                  <option value="1.8" ${this.modifiers.gravity === 1.8 ? 'selected' : ''}>⚓ Élevée (1.8x)</option>
+                  <option value="0.0" ${this.modifiers.gravity === 0.0 ? 'selected' : ''}>🚀 Zéro-G (Spatiale)</option>
+                </select>
+              </div>
 
-            <div class="mod-item">
-              <label>⚡ Vitesse des Vers</label>
-              <select id="mod-speed">
-                <option value="1.0" ${this.modifiers.wormSpeed === 1.0 ? 'selected' : ''}>Normale (1.0x)</option>
-                <option value="1.5" ${this.modifiers.wormSpeed === 1.5 ? 'selected' : ''}>🔥 Turbo (1.5x)</option>
-                <option value="0.75" ${this.modifiers.wormSpeed === 0.75 ? 'selected' : ''}>🐢 Tactique (0.75x)</option>
-              </select>
-            </div>
+              <div class="mod-item">
+                <label>🪢 Grappin Ninja</label>
+                <select id="mod-rope">
+                  <option value="normal" ${this.modifiers.ropeReach === 'normal' ? 'selected' : ''}>Normale (220px)</option>
+                  <option value="infinite" ${this.modifiers.ropeReach === 'infinite' ? 'selected' : ''}>♾️ Portée Infinie</option>
+                </select>
+              </div>
 
-            <div class="mod-item">
-              <label>❤️ Santé Max</label>
-              <select id="mod-health">
-                <option value="100" ${this.modifiers.maxHealth === 100 ? 'selected' : ''}>100 PV (Standard)</option>
-                <option value="50" ${this.modifiers.maxHealth === 50 ? 'selected' : ''}>💀 50 PV (Hardcore)</option>
-                <option value="200" ${this.modifiers.maxHealth === 200 ? 'selected' : ''}>🛡️ 200 PV (Titans)</option>
-              </select>
-            </div>
+              <div class="mod-item">
+                <label>⚡ Vitesse des Vers</label>
+                <select id="mod-speed">
+                  <option value="1.0" ${this.modifiers.wormSpeed === 1.0 ? 'selected' : ''}>Normale (1.0x)</option>
+                  <option value="1.5" ${this.modifiers.wormSpeed === 1.5 ? 'selected' : ''}>🔥 Turbo (1.5x)</option>
+                  <option value="0.75" ${this.modifiers.wormSpeed === 0.75 ? 'selected' : ''}>🐢 Tactique (0.75x)</option>
+                </select>
+              </div>
 
-            <div class="mod-item">
-              <label>♾️ Munitions & Rechargement</label>
-              <select id="mod-ammo">
-                <option value="standard" ${!this.modifiers.unlimitedAmmo ? 'selected' : ''}>Standard (Clips & Recharge)</option>
-                <option value="unlimited" ${this.modifiers.unlimitedAmmo ? 'selected' : ''}>💥 Tirs Illimités (No Reload)</option>
-              </select>
-            </div>
+              <div class="mod-item">
+                <label>❤️ Santé Max</label>
+                <select id="mod-health">
+                  <option value="100" ${this.modifiers.maxHealth === 100 ? 'selected' : ''}>100 PV (Standard)</option>
+                  <option value="50" ${this.modifiers.maxHealth === 50 ? 'selected' : ''}>💀 50 PV (Hardcore)</option>
+                  <option value="200" ${this.modifiers.maxHealth === 200 ? 'selected' : ''}>🛡️ 200 PV (Titans)</option>
+                </select>
+              </div>
 
-            <div class="mod-item">
-              <label>🏆 Objectif de Frags</label>
-              <select id="mod-frags">
-                <option value="5" ${this.modifiers.fragLimit === 5 ? 'selected' : ''}>5 Frags</option>
-                <option value="10" ${this.modifiers.fragLimit === 10 ? 'selected' : ''}>10 Frags (Défaut)</option>
-                <option value="15" ${this.modifiers.fragLimit === 15 ? 'selected' : ''}>15 Frags</option>
-                <option value="20" ${this.modifiers.fragLimit === 20 ? 'selected' : ''}>20 Frags</option>
-                <option value="30" ${this.modifiers.fragLimit === 30 ? 'selected' : ''}>30 Frags</option>
-              </select>
-            </div>
+              <div class="mod-item">
+                <label>♾️ Munitions</label>
+                <select id="mod-ammo">
+                  <option value="standard" ${!this.modifiers.unlimitedAmmo ? 'selected' : ''}>Standard (Clips)</option>
+                  <option value="unlimited" ${this.modifiers.unlimitedAmmo ? 'selected' : ''}>💥 Illimitées (No Reload)</option>
+                </select>
+              </div>
 
-            <div class="mod-item">
-              <label>🎮 Mode de Jeu</label>
-              <select id="mod-gamemode">
-                <option value="ffa" ${this.modifiers.gameMode === 'ffa' ? 'selected' : ''}>⚔️ Deathmatch (Tous contre tous)</option>
-                <option value="teams" ${this.modifiers.gameMode === 'teams' ? 'selected' : ''}>👥 Équipes (2 équipes)</option>
-                <option value="koth" ${this.modifiers.gameMode === 'koth' ? 'selected' : ''}>👑 Roi de la Colline</option>
-              </select>
-            </div>
+              <div class="mod-item">
+                <label>🏆 Objectif (Score/Frags)</label>
+                <select id="mod-frags">
+                  <option value="5" ${this.modifiers.fragLimit === 5 ? 'selected' : ''}>5 Points</option>
+                  <option value="10" ${this.modifiers.fragLimit === 10 ? 'selected' : ''}>10 Points (Défaut)</option>
+                  <option value="15" ${this.modifiers.fragLimit === 15 ? 'selected' : ''}>15 Points</option>
+                  <option value="20" ${this.modifiers.fragLimit === 20 ? 'selected' : ''}>20 Points</option>
+                  <option value="30" ${this.modifiers.fragLimit === 30 ? 'selected' : ''}>30 Points</option>
+                </select>
+              </div>
 
-            <div class="mod-item">
-              <label>🗺️ Type de Map</label>
-              <select id="mod-maptype">
-                <option value="cave" ${this.modifiers.mapType === 'cave' ? 'selected' : ''}>🕳️ Cavernes (Défaut)</option>
-                <option value="volcano" ${this.modifiers.mapType === 'volcano' ? 'selected' : ''}>🌋 Volcan</option>
-                <option value="swiss" ${this.modifiers.mapType === 'swiss' ? 'selected' : ''}>🧀 Fromage Suisse</option>
-                <option value="fortress" ${this.modifiers.mapType === 'fortress' ? 'selected' : ''}>🏰 Forteresse</option>
-                <option value="open" ${this.modifiers.mapType === 'open' ? 'selected' : ''}>🌄 Terrain Ouvert</option>
-              </select>
-            </div>
+              <div class="mod-item">
+                <label>⚔️ Dégâts</label>
+                <select id="mod-damage">
+                  <option value="1.0" ${this.modifiers.damageScale === 1.0 ? 'selected' : ''}>Normaux (1x)</option>
+                  <option value="0.5" ${this.modifiers.damageScale === 0.5 ? 'selected' : ''}>💛 Doux (0.5x)</option>
+                  <option value="2.0" ${this.modifiers.damageScale === 2.0 ? 'selected' : ''}>🔴 Double (2x)</option>
+                  <option value="3.0" ${this.modifiers.damageScale === 3.0 ? 'selected' : ''}>💀 Triple (3x)</option>
+                </select>
+              </div>
 
-            <div class="mod-item">
-              <label>⚔️ Dégâts</label>
-              <select id="mod-damage">
-                <option value="1.0" ${this.modifiers.damageScale === 1.0 ? 'selected' : ''}>Normaux (1x)</option>
-                <option value="0.5" ${this.modifiers.damageScale === 0.5 ? 'selected' : ''}>💛 Doux (0.5x)</option>
-                <option value="2.0" ${this.modifiers.damageScale === 2.0 ? 'selected' : ''}>🔴 Double (2x)</option>
-                <option value="3.0" ${this.modifiers.damageScale === 3.0 ? 'selected' : ''}>💀 Triple (3x)</option>
-              </select>
-            </div>
+              <div class="mod-item">
+                <label>💊 Régénération</label>
+                <select id="mod-regen">
+                  <option value="0" ${this.modifiers.regenRate === 0 ? 'selected' : ''}>Aucune</option>
+                  <option value="1" ${this.modifiers.regenRate === 1 ? 'selected' : ''}>🟡 Lente (1 HP/s)</option>
+                  <option value="3" ${this.modifiers.regenRate === 3 ? 'selected' : ''}>🟢 Rapide (3 HP/s)</option>
+                </select>
+              </div>
 
-            <div class="mod-item">
-              <label>💊 Régénération</label>
-              <select id="mod-regen">
-                <option value="0" ${this.modifiers.regenRate === 0 ? 'selected' : ''}>Aucune</option>
-                <option value="1" ${this.modifiers.regenRate === 1 ? 'selected' : ''}>🟡 Lente (1 HP/s)</option>
-                <option value="3" ${this.modifiers.regenRate === 3 ? 'selected' : ''}>🟢 Rapide (3 HP/s)</option>
-              </select>
-            </div>
+              <div class="mod-item">
+                <label>💣 Explosions</label>
+                <select id="mod-explosion">
+                  <option value="1.0" ${this.modifiers.explosionScale === 1.0 ? 'selected' : ''}>Normale (1x)</option>
+                  <option value="0.5" ${this.modifiers.explosionScale === 0.5 ? 'selected' : ''}>🔹 Petite (0.5x)</option>
+                  <option value="2.0" ${this.modifiers.explosionScale === 2.0 ? 'selected' : ''}>🔴 Grande (2x)</option>
+                </select>
+              </div>
 
-            <div class="mod-item">
-              <label>💣 Taille des Explosions</label>
-              <select id="mod-explosion">
-                <option value="1.0" ${this.modifiers.explosionScale === 1.0 ? 'selected' : ''}>Normale (1x)</option>
-                <option value="0.5" ${this.modifiers.explosionScale === 0.5 ? 'selected' : ''}>🔹 Petite (0.5x)</option>
-                <option value="2.0" ${this.modifiers.explosionScale === 2.0 ? 'selected' : ''}>🔴 Grande (2x)</option>
-              </select>
-            </div>
+              <div class="mod-item">
+                <label>🛡️ Dégâts Propres</label>
+                <select id="mod-selfdmg">
+                  <option value="false" ${!this.modifiers.noSelfDamage ? 'selected' : ''}>Actif (Normal)</option>
+                  <option value="true" ${this.modifiers.noSelfDamage ? 'selected' : ''}>🛡️ Immunité</option>
+                </select>
+              </div>
 
-            <div class="mod-item">
-              <label>🛡️ Dégâts Propres</label>
-              <select id="mod-selfdmg">
-                <option value="false" ${!this.modifiers.noSelfDamage ? 'selected' : ''}>Normaux (self-damage actif)</option>
-                <option value="true" ${this.modifiers.noSelfDamage ? 'selected' : ''}>🛡️ Immunité self-damage</option>
-              </select>
+              <div class="mod-item">
+                <label>🧪 Acide sur la Map</label>
+                <select id="mod-acid">
+                  <option value="true" ${this.modifiers.acidEnabled ? 'selected' : ''}>🧪 Activé</option>
+                  <option value="false" ${!this.modifiers.acidEnabled ? 'selected' : ''}>Désactivé</option>
+                </select>
+              </div>
             </div>
+          </div>
 
-            <div class="mod-item">
-              <label>🧪 Acide sur la Map</label>
-              <select id="mod-acid">
-                <option value="true" ${this.modifiers.acidEnabled ? 'selected' : ''}>🧪 Activé</option>
-                <option value="false" ${!this.modifiers.acidEnabled ? 'selected' : ''}>Désactivé</option>
-              </select>
+          <!-- RIGHT COLUMN: Choix de la Map + Preview -->
+          <div class="lobby-section column-map">
+            <div class="section-title">🗺️ Choix de la Carte</div>
+
+            <div class="map-selection-content">
+              <div class="map-cards-selector">
+                ${(Object.keys(MAP_METAS) as MapType[]).map(mKey => {
+                  const meta = MAP_METAS[mKey];
+                  const isSelected = (this.modifiers.mapType || 'cave') === mKey;
+                  return `
+                    <button type="button" class="map-select-btn ${isSelected ? 'active' : ''}" data-map="${mKey}">
+                      <span class="map-btn-icon">${meta.icon}</span>
+                      <span class="map-btn-title">${meta.name}</span>
+                    </button>
+                  `;
+                }).join('')}
+              </div>
+
+              <div class="map-preview-card">
+                <div class="map-preview-top">
+                  <span class="preview-badge" id="preview-map-title">${(MAP_METAS[this.modifiers.mapType || 'cave'] || MAP_METAS.cave).icon} ${(MAP_METAS[this.modifiers.mapType || 'cave'] || MAP_METAS.cave).name}</span>
+                  <button type="button" class="btn btn-secondary btn-sm" id="btn-random-map-seed" title="Générer une autre variante de cette carte">🔄 Autre graine</button>
+                </div>
+
+                <div class="map-canvas-wrapper">
+                  <canvas id="map-preview-canvas" width="300" height="188"></canvas>
+                </div>
+
+                <p class="map-desc-text" id="preview-map-desc">
+                  ${(MAP_METAS[this.modifiers.mapType || 'cave'] || MAP_METAS.cave).desc}
+                </p>
+              </div>
             </div>
           </div>
         </div>
@@ -344,7 +401,6 @@ export class LobbyUI {
     bindSelect('#mod-ammo', 'unlimitedAmmo', false, true);
     bindSelect('#mod-frags', 'fragLimit', true);
     bindSelect('#mod-gamemode', 'gameMode');
-    bindSelect('#mod-maptype', 'mapType');
     bindSelect('#mod-damage', 'damageScale', true);
     bindSelect('#mod-regen', 'regenRate', true);
     bindSelect('#mod-explosion', 'explosionScale', true);
@@ -360,6 +416,24 @@ export class LobbyUI {
       const val = acidEl.value === 'true';
       (this.modifiers as any).acidEnabled = val;
       this.callbacks.onModifierChanged({ acidEnabled: val });
+      this.updateMapPreview();
+    });
+
+    // Map selection buttons
+    this.container.querySelectorAll('.map-select-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mapType = (btn as HTMLElement).dataset.map as MapType;
+        if (!mapType) return;
+        this.modifiers.mapType = mapType;
+        this.callbacks.onModifierChanged({ mapType });
+        this.updateMapPreview();
+      });
+    });
+
+    // Randomize seed button
+    this.container.querySelector('#btn-random-map-seed')?.addEventListener('click', () => {
+      this.previewSeed = Math.floor(Math.random() * 1000000);
+      this.updateMapPreview();
     });
 
     this.container.querySelector('#btn-start-match')?.addEventListener('click', () => {
@@ -371,6 +445,9 @@ export class LobbyUI {
       this.callbacks.onReturnToMenu();
       this.showMainMenu();
     });
+
+    // Initial map preview render
+    this.updateMapPreview();
 
     try {
       const roomId = await this.callbacks.onHostOnline(this.playerName, this.selectedLoadout, this.modifiers);
@@ -409,10 +486,27 @@ export class LobbyUI {
           </div>
         </div>
 
-        <div class="lobby-section">
-          <div class="section-title">⚙️ Règles & Modificateurs Choisis par l'Hôte</div>
-          <div class="modifiers-summary" id="client-modifiers-summary">
-            ${this.renderModifiersSummary()}
+        <div class="lobby-columns">
+          <div class="lobby-section column-modifiers">
+            <div class="section-title">⚙️ Règles Choisies par l'Hôte</div>
+            <div class="modifiers-summary" id="client-modifiers-summary">
+              ${this.renderModifiersSummary()}
+            </div>
+          </div>
+
+          <div class="lobby-section column-map">
+            <div class="section-title">🗺️ Carte de Combat</div>
+            <div class="map-preview-card">
+              <div class="map-preview-top">
+                <span class="preview-badge" id="preview-map-title">${(MAP_METAS[this.modifiers.mapType || 'cave'] || MAP_METAS.cave).icon} ${(MAP_METAS[this.modifiers.mapType || 'cave'] || MAP_METAS.cave).name}</span>
+              </div>
+              <div class="map-canvas-wrapper">
+                <canvas id="map-preview-canvas" width="300" height="188"></canvas>
+              </div>
+              <p class="map-desc-text" id="preview-map-desc">
+                ${(MAP_METAS[this.modifiers.mapType || 'cave'] || MAP_METAS.cave).desc}
+              </p>
+            </div>
           </div>
         </div>
 
@@ -430,6 +524,46 @@ export class LobbyUI {
     this.container.querySelector('#btn-cancel-join')?.addEventListener('click', () => {
       this.callbacks.onReturnToMenu();
       this.showMainMenu();
+    });
+
+    this.updateMapPreview();
+  }
+
+  public updateMapPreview() {
+    const canvas = this.container.querySelector('#map-preview-canvas') as HTMLCanvasElement;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const currentMap = this.modifiers.mapType || 'cave';
+    const acidOn = this.modifiers.acidEnabled !== false;
+
+    // Fast generation for the preview
+    const terrain = new Terrain(CONFIG.MAP_WIDTH, CONFIG.MAP_HEIGHT);
+    terrain.generateMap(this.previewSeed, currentMap, acidOn);
+
+    // Draw scaled down to preview canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = CONFIG.COLORS.SKY;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.drawImage(terrain.dirtCanvas, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(terrain.rockCanvas, 0, 0, canvas.width, canvas.height);
+    if (acidOn) {
+      ctx.drawImage(terrain.acidCanvas, 0, 0, canvas.width, canvas.height);
+    }
+
+    // Update text
+    const meta = MAP_METAS[currentMap] || MAP_METAS.cave;
+    const titleEl = this.container.querySelector('#preview-map-title');
+    if (titleEl) titleEl.textContent = `${meta.icon} ${meta.name}`;
+    const descEl = this.container.querySelector('#preview-map-desc');
+    if (descEl) descEl.textContent = meta.desc;
+
+    // Highlight active button
+    this.container.querySelectorAll('.map-select-btn').forEach(btn => {
+      const isSelected = (btn as HTMLElement).dataset.map === currentMap;
+      btn.classList.toggle('active', isSelected);
     });
   }
 
@@ -463,6 +597,8 @@ export class LobbyUI {
     if (summaryEl) {
       summaryEl.innerHTML = this.renderModifiersSummary();
     }
+
+    this.updateMapPreview();
   }
 
   private renderPlayersList(): string {

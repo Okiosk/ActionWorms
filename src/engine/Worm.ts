@@ -252,10 +252,13 @@ export class Worm {
     const maxWalkSpeed = 1.2 * this.modifiers.wormSpeed;
 
     if (this.rope.isAttached()) {
-      // Swing pumping while attached to ninja rope
+      // Gentle swing pumping while attached to ninja rope (soft, controlled, not overpowered)
+      const maxSwingSpeed = 1.6 * this.modifiers.wormSpeed;
       if (moveDir !== 0) {
-        this.vx += moveDir * 0.18;
+        this.vx += moveDir * (0.05 * this.modifiers.wormSpeed);
+        this.vx = Math.max(-maxSwingSpeed, Math.min(maxSwingSpeed, this.vx));
       }
+      this.vx *= 0.996;
     } else if (this.grounded) {
       // Ground movement: crisp acceleration capped at walking speed
       if (moveDir !== 0) {
