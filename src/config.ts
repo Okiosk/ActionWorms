@@ -29,6 +29,7 @@ export const CONFIG = {
   MAT_AIR: 0,
   MAT_DIRT: 1,
   MAT_ROCK: 2,
+  MAT_ACID: 3,
 
   // 8 Distinct Player Colors & Names
   PLAYER_COLORS: [

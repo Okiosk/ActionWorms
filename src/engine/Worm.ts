@@ -45,6 +45,8 @@ export class Worm {
   public grounded: boolean = false;
   public isDigging: boolean = false;
   public respawnTimer: number = 0;
+  public freezeTimer: number = 0;     // frames remaining frozen
+  private regenAccum: number = 0;     // fractional HP accumulator for regen
 
   // Rope
   public rope: NinjaRope;
@@ -134,6 +136,10 @@ export class Worm {
     return this.health > 0;
   }
 
+  public freeze(frames: number) {
+    this.freezeTimer = Math.max(this.freezeTimer, frames);
+  }
+
   public takeDamage(amount: number, knockX: number, knockY: number, attackerId: string) {
     if (!this.isAlive()) return;
 
@@ -164,6 +170,20 @@ export class Worm {
         this.respawnTimer--;
       }
       return;
+    }
+
+    // Freeze effect: can't move or shoot while frozen
+    if (this.freezeTimer > 0) {
+      this.freezeTimer--;
+      // Spawn ice-blue particles every 10 frames as a visual cue
+      if (this.freezeTimer % 10 === 0) {
+        particles.spawn(this.x, this.y, (Math.random() - 0.5) * 0.5, -0.5, 'spark', '#aaddff', 2, 20);
+      }
+      // Still apply gravity and physics, but skip movement input
+      const frozenGravity = CONFIG.GRAVITY * this.modifiers.gravity;
+      this.vy = Math.min(CONFIG.MAX_FALL_SPEED, this.vy + frozenGravity);
+      this.resolvePhysics(terrain);
+      return; // skip rest of update
     }
 
     // Cooldown timers
@@ -281,6 +301,16 @@ export class Worm {
     // Physics step & Slope climbing with Continuous Collision Detection
     this.resolvePhysics(terrain);
 
+    // HP Regeneration (from modifiers) — regenRate is HP/second, game runs at 60fps
+    if (this.modifiers.regenRate > 0 && this.isAlive()) {
+      this.regenAccum += this.modifiers.regenRate / 60;
+      if (this.regenAccum >= 1) {
+        const healed = Math.floor(this.regenAccum);
+        this.regenAccum -= healed;
+        this.health = Math.min(this.health + healed, this.maxHealth);
+      }
+    }
+
     // Firing Weapons
     if (input.fire) {
       this.attemptFire(onShoot, particles);
@@ -315,12 +345,13 @@ export class Worm {
     if (weapon.id === 'bazooka') sound.playBazooka();
     else if (weapon.id === 'minigun') sound.playMinigun();
     else if (weapon.id === 'shotgun') sound.playShotgun();
-    else if (weapon.id === 'gauss' || weapon.id === 'railgun') sound.playRailgun();
-    else if (weapon.id === 'homing_missile') sound.playHoming();
-    else if (weapon.id === 'bouncy_ball') sound.playBouncy();
+    else if (weapon.id === 'gauss' || weapon.id === 'railgun' || weapon.id === 'sniper') sound.playRailgun();
+    else if (weapon.id === 'homing_missile' || weapon.id === 'mortar') sound.playHoming();
+    else if (weapon.id === 'bouncy_ball' || weapon.id === 'boomerang') sound.playBouncy();
     else if (weapon.id === 'dart_gun') sound.playDart();
     else if (weapon.id === 'vortex') sound.playVortex();
-    else if (weapon.id === 'grenade' || weapon.id === 'chiquita') sound.playGrenadeBounce();
+    else if (weapon.id === 'grenade' || weapon.id === 'chiquita' || weapon.id === 'acid_bomb' || weapon.id === 'freeze_bomb') sound.playGrenadeBounce();
+    else if (weapon.id === 'laser') sound.playDart();
 
     // Spawn muzzle sparks
     const muzzleX = this.x + Math.cos(this.aimAngle) * 9;

@@ -877,3 +877,34 @@ body, html {
   text-align: center;
 }
 
+/* Team Selection Styles */
+.team-btn, .team-badge {
+  border-radius: 4px;
+  font-family: 'VT323', monospace;
+  font-size: 14px;
+  padding: 2px 8px;
+  border: 1px solid rgba(255,255,255,0.2);
+  transition: all 0.15s ease;
+}
+
+.team-red {
+  background: rgba(220, 40, 40, 0.35);
+  color: #ff6666;
+  border-color: #ff3344;
+}
+
+.team-red:hover {
+  background: rgba(220, 40, 40, 0.65);
+}
+
+.team-blue {
+  background: rgba(30, 100, 230, 0.35);
+  color: #66aaff;
+  border-color: #3388ff;
+}
+
+.team-blue:hover {
+  background: rgba(30, 100, 230, 0.65);
+}
+
+

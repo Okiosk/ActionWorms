@@ -30,6 +30,7 @@ export class Projectile {
   public isSubCluster: boolean;
   public armed: boolean = false;
   public armTimer: number = 20;
+  public acidPoolCenter?: { x: number; y: number; r: number };
 
   constructor(params: ProjectileParams) {
     this.id = params.id;
@@ -47,7 +48,7 @@ export class Projectile {
   public update(
     terrain: Terrain,
     particles: ParticleManager,
-    worms: { id: string; x: number; y: number; radius: number; takeDamage: (dmg: number, kx: number, ky: number, attackerId: string) => void; isAlive: () => boolean }[],
+    worms: { id: string; x: number; y: number; radius: number; takeDamage: (dmg: number, kx: number, ky: number, attackerId: string) => void; isAlive: () => boolean; freeze?: (frames: number) => void }[],
     onDetonate: (proj: Projectile) => void
   ) {
     if (!this.alive) return;
@@ -134,6 +135,16 @@ export class Projectile {
           this.detonate(terrain, particles, worms, onDetonate);
           return;
         }
+      }
+    }
+
+    // Boomerang: reverse direction halfway through fuse
+    if (this.weapon.boomerang) {
+      const halfFuse = this.weapon.fuseFrames / 2;
+      if (this.fuse <= halfFuse && this.fuse > halfFuse - 1) {
+        // Reverse velocity toward shooter (just reverse X)
+        this.vx = -this.vx * 0.9;
+        this.vy = -this.vy * 0.5;
       }
     }
 
@@ -227,11 +238,16 @@ export class Projectile {
   public detonate(
     terrain: Terrain,
     particles: ParticleManager,
-    worms: { id: string; x: number; y: number; radius: number; takeDamage: (dmg: number, kx: number, ky: number, attackerId: string) => void; isAlive: () => boolean }[],
+    worms: { id: string; x: number; y: number; radius: number; takeDamage: (dmg: number, kx: number, ky: number, attackerId: string) => void; isAlive: () => boolean; freeze?: (frames: number) => void }[],
     onDetonate: (proj: Projectile) => void
   ) {
     if (!this.alive) return;
     this.alive = false;
+
+    // Record acid pool center so Game.ts can carve the terrain
+    if (this.weapon.acidPool) {
+      this.acidPoolCenter = { x: this.x, y: this.y, r: this.weapon.craterRadius + 5 };
+    }
 
     // Carve terrain
     if (this.weapon.craterRadius > 0) {
@@ -263,8 +279,28 @@ export class Projectile {
       }
     }
 
+    // Freeze bomb: freeze nearby worms
+    if (this.weapon.freezeDuration) {
+      const freezeRadius = this.weapon.craterRadius * 2.5;
+      for (const w of worms) {
+        if (!w.isAlive()) continue;
+        const dist = Math.hypot(w.x - this.x, w.y - this.y);
+        if (dist <= freezeRadius) {
+          w.freeze?.(this.weapon.freezeDuration);
+        }
+      }
+    }
+
+    // Acid bomb: visual spray effect (terrain carving handled by Game.ts via acidPoolCenter)
+    if (this.weapon.acidPool) {
+      particles.spawn(this.x, this.y, 0, -1, 'dirt', '#22ff44', 5, 30);
+      particles.spawn(this.x, this.y, 2, -0.5, 'dirt', '#00ee22', 4, 25);
+      particles.spawn(this.x, this.y, -2, -0.5, 'dirt', '#00ee22', 4, 25);
+    }
+
     onDetonate(this);
   }
+
 
   public draw(ctx: CanvasRenderingContext2D) {
     if (!this.alive) return;
@@ -358,6 +394,55 @@ export class Projectile {
       ctx.beginPath();
       ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
       ctx.fill();
+    } else if (this.weapon.id === 'laser') {
+      ctx.strokeStyle = '#ff2222';
+      ctx.lineWidth = 2;
+      ctx.shadowColor = '#ff6666';
+      ctx.shadowBlur = 6;
+      ctx.beginPath();
+      ctx.moveTo(this.x - this.vx * 8, this.y - this.vy * 8);
+      ctx.lineTo(this.x, this.y);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    } else if (this.weapon.id === 'acid_bomb') {
+      ctx.fillStyle = '#22dd22';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#00ff00';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    } else if (this.weapon.id === 'freeze_bomb') {
+      ctx.fillStyle = '#aaddff';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    } else if (this.weapon.id === 'mortar') {
+      ctx.fillStyle = '#886644';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    } else if (this.weapon.id === 'boomerang') {
+      const angle = Math.atan2(this.vy, this.vx);
+      ctx.translate(this.x, this.y);
+      ctx.rotate(angle);
+      ctx.fillStyle = '#cc8822';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 7, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (this.weapon.id === 'sniper') {
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(this.x - this.vx * 0.5, this.y - this.vy * 0.5);
+      ctx.lineTo(this.x, this.y);
+      ctx.stroke();
     } else {
       // Bullets (minigun, shotgun)
       ctx.fillStyle = '#ffee66';

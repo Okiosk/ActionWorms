@@ -128,13 +128,19 @@ export class HUD {
     if (mods.ropeReach === 'infinite') ruleText += ` • ♾️ Grappin Infini`;
     if (mods.unlimitedAmmo) ruleText += ` • 💥 Tirs Illimités`;
     if (mods.wormSpeed === 1.5) ruleText += ` • 🔥 Turbo`;
+    // KOTH score indicator
+    if (mods.gameMode === 'koth' && (game as any).kothScores) {
+      const scores = (game as any).kothScores as number[];
+      ruleText = `👑 KOTH | 🔴 ${scores[0]} - ${scores[1]} 🔵 | Objectif: ${game.fragLimit}`;
+    }
     this.matchRuleBadgeEl.textContent = ruleText;
 
     // Identify local player
     const p1 = game.getLocalWorm() || game.worms[0];
 
     if (p1) {
-      this.p1Name.textContent = p1.name;
+      const myTeam = mods.gameMode === 'teams' ? (mods.teams[p1.id] === 0 ? ' 🔴' : ' 🔵') : '';
+      this.p1Name.textContent = `${p1.name}${myTeam}`;
       this.p1ColorDot.style.background = p1.color;
 
       // HP Bar
@@ -184,10 +190,11 @@ export class HUD {
       for (const opp of opponents) {
         const maxHp = opp.maxHealth || 100;
         const hpPct = Math.max(0, Math.min(100, (opp.health / maxHp) * 100));
+        const team = mods.gameMode === 'teams' ? (mods.teams[opp.id] === 0 ? ' 🔴' : ' 🔵') : '';
         scoreHtml += `
           <div class="scoreboard-row">
             <span class="score-dot" style="background:${opp.color}"></span>
-            <span class="score-name">${this.escapeHtml(opp.name)}</span>
+            <span class="score-name">${this.escapeHtml(opp.name)}${team}</span>
             <div class="score-bar-bg">
               <div class="score-bar-fill ${hpPct < 30 ? 'critical' : hpPct < 60 ? 'warning' : ''}" style="width:${hpPct}%"></div>
             </div>

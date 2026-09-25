@@ -43,6 +43,12 @@ export class Game {
   public shakeDuration: number = 0;
   public shakeIntensity: number = 0;
 
+  // KOTH scores [team0/p0, team1/p1, ...]
+  public kothScores: number[] = [0, 0];
+  public kothZoneHolder: number = -1; // -1 = contested, 0..1 = team index, or worm index in FFA
+  private renderFrameTime: number = 0; // for acid animation
+  private acidTickAccum: number = 0;   // for periodic acid damage
+
   // Smooth camera following local player
   public camX: number = 0;
   public camY: number = 0;
@@ -304,7 +310,7 @@ export class Game {
           this.fragLimit = msg.modifiers.fragLimit;
           if (this.mapSeed !== msg.mapSeed) {
             this.mapSeed = msg.mapSeed;
-            this.terrain.generateMap(msg.mapSeed);
+            this.terrain.generateMap(msg.mapSeed, msg.modifiers.mapType || 'cave', msg.modifiers.acidEnabled !== false);
           }
           this.onWelcomeReceived?.();
           this.onLobbyUpdate?.(msg.players, msg.modifiers);
@@ -314,9 +320,11 @@ export class Game {
           this.onLobbyUpdate?.(msg.players, msg.modifiers);
         } else if (msg.type === 'START_MATCH') {
           this.mapSeed = msg.mapSeed;
-          this.terrain.generateMap(msg.mapSeed);
+          this.terrain.generateMap(msg.mapSeed, msg.modifiers.mapType || 'cave', msg.modifiers.acidEnabled !== false);
           this.modifiers = msg.modifiers;
           this.fragLimit = msg.modifiers.fragLimit;
+          this.kothScores = [0, 0];
+          this.kothZoneHolder = -1;
           this.particles.clear();
           this.projectiles = [];
           this.worms = [];
@@ -370,7 +378,9 @@ export class Game {
 
     if (mode === 'online_host') {
       this.mapSeed = Math.floor(Math.random() * 1000000);
-      this.terrain.generateMap(this.mapSeed);
+      this.terrain.generateMap(this.mapSeed, this.modifiers.mapType || 'cave', this.modifiers.acidEnabled !== false);
+      this.kothScores = [0, 0];
+      this.kothZoneHolder = -1;
 
       // Register host in lobby
       this.lobbyPlayers.clear();
@@ -390,7 +400,9 @@ export class Game {
       hostWorm.spawn(spawn.x, spawn.y);
       this.worms.push(hostWorm);
     } else if (mode === 'online_client') {
-      this.terrain.generateMap(this.mapSeed);
+      this.terrain.generateMap(this.mapSeed, this.modifiers.mapType || 'cave', this.modifiers.acidEnabled !== false);
+      this.kothScores = [0, 0];
+      this.kothZoneHolder = -1;
       const clientColor = CONFIG.PLAYER_COLORS[1];
       const clientWorm = new Worm(this.net.myPeerId, myName || 'Moi', clientColor, false, myLoadout);
       clientWorm.applyModifiers(this.modifiers);
@@ -406,10 +418,12 @@ export class Game {
     if (this.mode !== 'online_host') return;
 
     this.mapSeed = Math.floor(Math.random() * 1000000);
-    this.terrain.generateMap(this.mapSeed);
+    this.terrain.generateMap(this.mapSeed, this.modifiers.mapType || 'cave', this.modifiers.acidEnabled !== false);
     this.particles.clear();
     this.projectiles = [];
     this.worms = [];
+    this.kothScores = [0, 0];
+    this.kothZoneHolder = -1;
 
     const players = this.getLobbyPlayers();
     for (const p of players) {
@@ -486,9 +500,10 @@ export class Game {
   }
 
   private handleProjectileDetonation(proj: Projectile) {
-    // Screen shake on major explosions
+    // Apply explosion scale modifier to shake intensity
+    const expScale = this.modifiers.explosionScale ?? 1.0;
     if (proj.weapon.craterRadius >= 15) {
-      this.triggerScreenShake(8, proj.weapon.craterRadius * 0.25);
+      this.triggerScreenShake(8, proj.weapon.craterRadius * 0.25 * expScale);
     }
 
     // Cluster bomb explosion splits into sub-clusters!
@@ -524,6 +539,7 @@ export class Game {
     if (this.shakeDuration > 0) {
       this.shakeDuration--;
     }
+    this.renderFrameTime++;
 
     if (this.mode === 'online_client') {
       // 1. Broadcast local inputs to host at 60Hz
@@ -550,17 +566,16 @@ export class Game {
     }
 
     // --- Host Authoritative Simulation ---
+    const mods = this.modifiers;
 
     // 1. Update Worms (up to 8 players)
     for (const worm of this.worms) {
       let input: WormInput;
-
       if (worm.id === this.net.myPeerId) {
         input = this.localP1Input;
       } else {
         input = this.remoteInputs.get(worm.id) || { left: false, right: false, up: false, down: false, jump: false, fire: false, rope: false };
       }
-
       worm.update(input, this.terrain, this.particles, (w, wep, ang) => this.spawnProjectiles(w, wep, ang));
 
       // Handle Respawn for all worms
@@ -570,9 +585,37 @@ export class Game {
       }
     }
 
-    // 2. Update Projectiles
+    // 2. Acid damage tick (every 6 frames = ~10 times/sec)
+    this.acidTickAccum++;
+    if (this.acidTickAccum >= 6) {
+      this.acidTickAccum = 0;
+      for (const worm of this.worms) {
+        if (!worm.isAlive()) continue;
+        // Check if worm feet are touching acid
+        const feetY = worm.y + 5;
+        if (
+          this.terrain.isAcid(worm.x, feetY) ||
+          this.terrain.isAcid(worm.x - 3, feetY) ||
+          this.terrain.isAcid(worm.x + 3, feetY) ||
+          this.terrain.isAcid(worm.x, worm.y)
+        ) {
+          // 3 HP per 6 frames = ~30 HP/s (corrosive!)
+          worm.takeDamage(3, 0, 0, 'acid');
+          // Green acid particles
+          this.particles.spawn(worm.x + (Math.random() - 0.5) * 8, worm.y + 4, (Math.random() - 0.5) * 0.5, -0.8, 'spark', '#44ff44', 1.5, 15);
+          if (!worm.isAlive()) {
+            this.particles.spawnGibs(worm.x, worm.y);
+            this.onKillFeed?.(worm.name, 'Dissous par l\'acide');
+          }
+        }
+      }
+    }
+
+    // 3. Update Projectiles (with damageScale, noSelfDamage, explosionScale, friendlyFire)
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
+      const damageScale = mods.damageScale ?? 1.0;
+
       p.update(
         this.terrain,
         this.particles,
@@ -581,21 +624,47 @@ export class Game {
           x: w.x,
           y: w.y,
           radius: w.radius,
-          takeDamage: (dmg, kx, ky, attId) => {
-            w.takeDamage(dmg, kx, ky, attId);
-            this.particles.spawnBloodBurst(w.x, w.y, Math.min(25, dmg / 2));
-
+          takeDamage: (dmg: number, kx: number, ky: number, attId: string) => {
+            // No self damage modifier
+            if (mods.noSelfDamage && attId === w.id) return;
+            // Friendly fire check (teams mode)
+            if (mods.gameMode === 'teams') {
+              const attackerTeam = mods.teams[attId] ?? -1;
+              const victimTeam = mods.teams[w.id] ?? -1;
+              if (attackerTeam !== -1 && attackerTeam === victimTeam && attId !== w.id) return;
+            }
+            const scaledDmg = Math.round(dmg * damageScale);
+            w.takeDamage(scaledDmg, kx, ky, attId);
+            if (scaledDmg > 0) {
+              this.particles.spawnBloodBurst(w.x, w.y, Math.min(25, scaledDmg / 2));
+            }
             // Check if killed
             if (!w.isAlive()) {
               this.particles.spawnGibs(w.x, w.y);
               const killer = this.worms.find(k => k.id === attId);
               if (killer && killer.id !== w.id) {
-                killer.frags++;
-                this.onKillFeed?.(killer.name, w.name);
-                if (killer.frags >= this.fragLimit && !this.matchWinner) {
-                  this.matchWinner = killer;
-                  this.onMatchEnd?.(killer);
-                  this.net.broadcast({ type: 'MATCH_OVER', winnerId: killer.id });
+                if (mods.gameMode === 'ffa') {
+                  killer.frags++;
+                  this.onKillFeed?.(killer.name, w.name);
+                  if (killer.frags >= this.fragLimit && !this.matchWinner) {
+                    this.matchWinner = killer;
+                    this.onMatchEnd?.(killer);
+                    this.net.broadcast({ type: 'MATCH_OVER', winnerId: killer.id });
+                  }
+                } else if (mods.gameMode === 'teams') {
+                  killer.frags++;
+                  const killerTeam = mods.teams[killer.id] ?? 0;
+                  this.kothScores[killerTeam] = (this.kothScores[killerTeam] || 0) + 1;
+                  this.onKillFeed?.(killer.name, w.name);
+                  if (this.kothScores[killerTeam] >= this.fragLimit && !this.matchWinner) {
+                    this.matchWinner = killer;
+                    this.onMatchEnd?.(killer);
+                    this.net.broadcast({ type: 'MATCH_OVER', winnerId: killer.id });
+                  }
+                } else {
+                  // KOTH: kills still count toward kills but win by zone
+                  killer.frags++;
+                  this.onKillFeed?.(killer.name, w.name);
                 }
               } else {
                 this.onKillFeed?.(w.name, 'S\'est suicidé');
@@ -608,15 +677,62 @@ export class Game {
       );
 
       if (!p.alive) {
+        // Handle acid pool from acid_bomb
+        if (p.acidPoolCenter) {
+          this.terrain.rawCarveAcid(p.acidPoolCenter.x, p.acidPoolCenter.y, p.acidPoolCenter.r);
+        }
         this.projectiles.splice(i, 1);
       }
     }
 
-    // 3. Update Particles
+    // 4. KOTH Zone logic (only host computes this)
+    if (mods.gameMode === 'koth') {
+      this.updateKOTH();
+    }
+
+    // 5. Update Particles
     this.particles.update(this.terrain);
 
-    // 4. Host broadcasts state to peers at 60Hz
+    // 6. Host broadcasts state to peers at 60Hz
     this.broadcastHostState();
+  }
+
+  /** King of the Hill zone scoring. Zone is a circle at map center, radius 40px. */
+  private updateKOTH() {
+    const zoneX = this.terrain.width / 2;
+    const zoneY = this.terrain.height / 2;
+    const zoneR = 40;
+    const mods = this.modifiers;
+
+    const inZone = this.worms.filter(w => w.isAlive() && Math.hypot(w.x - zoneX, w.y - zoneY) <= zoneR);
+
+    if (mods.gameMode === 'teams') {
+      // Check which teams have worms in zone
+      const teamsInZone = new Set(inZone.map(w => mods.teams[w.id] ?? 0));
+      if (teamsInZone.size === 1) {
+        const controllingTeam = [...teamsInZone][0];
+        // 1 point per 60 frames = 1 pt/sec
+        this.kothScores[controllingTeam] = (this.kothScores[controllingTeam] || 0) + 1 / 60;
+        if (this.kothScores[controllingTeam] >= this.fragLimit * 12 && !this.matchWinner) {
+          const winner = inZone.find(w => (mods.teams[w.id] ?? 0) === controllingTeam) || this.worms[0];
+          this.matchWinner = winner;
+          this.onMatchEnd?.(winner);
+          this.net.broadcast({ type: 'MATCH_OVER', winnerId: winner.id });
+        }
+      }
+    } else {
+      // FFA: only 1 worm in zone to control it
+      if (inZone.length === 1) {
+        const controller = inZone[0];
+        controller.frags += 1 / 60; // fractional point accumulation
+        const score = Math.floor(controller.frags);
+        if (score >= this.fragLimit * 12 && !this.matchWinner) {
+          this.matchWinner = controller;
+          this.onMatchEnd?.(controller);
+          this.net.broadcast({ type: 'MATCH_OVER', winnerId: controller.id });
+        }
+      }
+    }
   }
 
   private broadcastHostState() {
@@ -781,8 +897,35 @@ export class Game {
       ctx.translate(ox, oy);
     }
 
-    // 1. Draw Terrain (dirt, rock, cavern sky)
-    this.terrain.draw(ctx);
+    // 1. Draw Terrain (dirt, rock, cavern sky) — pass time for acid animation
+    this.terrain.draw(ctx, this.renderFrameTime);
+
+    // 1b. Draw KOTH zone indicator (if KOTH mode)
+    if (this.modifiers.gameMode === 'koth') {
+      const zoneX = this.terrain.width / 2;
+      const zoneY = this.terrain.height / 2;
+      const zoneR = 40;
+      const pulse = 0.5 + 0.5 * Math.sin(this.renderFrameTime * 0.05);
+      ctx.save();
+      ctx.strokeStyle = `rgba(255, 215, 0, ${0.5 + pulse * 0.5})`;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.arc(zoneX, zoneY, zoneR, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = `rgba(255, 215, 0, ${0.04 + pulse * 0.06})`;
+      ctx.beginPath();
+      ctx.arc(zoneX, zoneY, zoneR, 0, Math.PI * 2);
+      ctx.fill();
+      // Crown icon at center
+      ctx.font = '14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = `rgba(255, 215, 0, ${0.6 + pulse * 0.4})`;
+      ctx.fillText('👑', zoneX, zoneY);
+      ctx.restore();
+    }
 
     // 2. Draw Particles (blood, smoke, sparks)
     this.particles.draw(ctx);

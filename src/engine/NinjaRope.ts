@@ -90,33 +90,33 @@ export class NinjaRope {
       const ox = hx / dist; // outward unit vector pointing from hook to worm
       const oy = hy / dist;
 
-      // 1. Reeling controls:
-      // Z / W / Jump -> reelIn (shorten cable, pull inward)
-      // S / Down      -> reelOut (lengthen cable, descend)
-      // Idle          -> cable length strictly fixed, pure pendulum swing
+      // 1. Reeling controls (classic Liero speed):
+      // Z / Jump -> reelIn (climb up toward anchor)
+      // S / Down -> reelOut (descend)
+      const reelSpeed = 3.2;
       if (reelIn) {
-        this.length = Math.max(16, this.length - 2.0);
+        this.length = Math.max(16, this.length - reelSpeed);
+        // Also impart an inward velocity impulse so climbing feels crisp and immediate
+        worm.vx -= ox * 0.8;
+        worm.vy -= oy * 0.8;
       } else if (reelOut) {
-        this.length = Math.min(this.maxLength, this.length + 2.0);
+        this.length = Math.min(this.maxLength, this.length + reelSpeed);
       }
 
-      // 2. Rigid Inelastic Distance Constraint (no teleport, velocity-only):
-      // If worm is beyond the cable length, cancel outward radial velocity.
-      // DO NOT project position here — let resolvePhysics handle movement so
-      // the CCD sub-stepping prevents wall clipping.
+      // 2. Rigid Inelastic Distance Constraint (authentic Liero pendulum):
+      // If worm is extended past current rope length, project radial velocity to 0
+      // and gently pull back to constraint boundary without oscillations
       if (dist > this.length) {
         const outwardVel = worm.vx * ox + worm.vy * oy;
         if (outwardVel > 0) {
-          // Cancel radial component, preserving 100% of tangential swing speed
+          // Zero outward radial velocity, preserving 100% of tangential pendulum speed
           worm.vx -= ox * outwardVel;
           worm.vy -= oy * outwardVel;
         }
-        // Apply a gentle restoring impulse proportional to over-extension
-        // (acts like a stiff spring rather than a hard snap, eliminating bounce)
-        const overExtension = dist - this.length;
-        const restoreStrength = Math.min(0.6, overExtension * 0.08);
-        worm.vx -= ox * restoreStrength;
-        worm.vy -= oy * restoreStrength;
+        // Direct correction along the line to maintain the exact rope radius
+        const overDist = dist - this.length;
+        worm.vx -= ox * Math.min(overDist * 0.4, 2.0);
+        worm.vy -= oy * Math.min(overDist * 0.4, 2.0);
       }
     }
   }
