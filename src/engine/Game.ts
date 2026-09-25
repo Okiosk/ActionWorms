@@ -16,9 +16,6 @@ import {
   LobbyPlayerInfo
 } from '../net/Protocol';
 import { sound } from './SoundEffects';
-import RAPIER from '@dimforge/rapier2d-compat';
-import { RapierWorld, DynamicEntityAABB } from '../physics/RapierWorld';
-import { Ragdoll } from './Ragdoll';
 
 export type GameMode = 'online_host' | 'online_client';
 
@@ -30,11 +27,6 @@ export class Game {
   public worms: Worm[] = [];
   public projectiles: Projectile[] = [];
   public nextProjectileId: number = 1;
-
-  // Rapier WASM Physics & Ragdolls
-  public rapierWorld?: RapierWorld;
-  public rapierInstance?: typeof RAPIER;
-  public ragdolls: Ragdoll[] = [];
 
   public mode: GameMode = 'online_host';
   public net: NetworkManager;
@@ -90,12 +82,6 @@ export class Game {
 
     this.terrain = new Terrain();
     this.terrain.onCarve = (cx, cy, r) => {
-      // Invalider les parois détruites dans le monde Rapier et propulser les corps proches
-      if (this.rapierWorld) {
-        this.rapierWorld.invalidateCrater(cx, cy, r);
-        this.rapierWorld.applyExplosionImpulse(cx, cy, r * 1.5, 3.2);
-      }
-
       if (this.mode === 'online_host') {
         this.pendingNetEvents.push({
           type: 'crater',
@@ -259,45 +245,9 @@ export class Game {
     return Array.from(this.lobbyPlayers.values());
   }
 
-  public initRapierPhysicsWorld(rapier: typeof RAPIER) {
-    this.rapierInstance = rapier;
-    if (this.rapierWorld) {
-      for (const ragdoll of this.ragdolls) {
-        ragdoll.destroy(this.rapierWorld.world);
-      }
-      this.rapierWorld.destroy();
-    }
-    this.ragdolls = [];
-    this.rapierWorld = new RapierWorld(rapier, this.modifiers.gravity);
-
-    for (const worm of this.worms) {
-      worm.initRapier(this.rapierWorld);
-      this.setupWormRagdoll(worm);
-    }
-  }
-
-  public setupWormRagdoll(worm: Worm) {
-    worm.onDeathRagdoll = (w, kx, ky) => {
-      if (!this.rapierWorld || !this.rapierInstance) return;
-      const ragdoll = new Ragdoll(
-        this.rapierInstance,
-        this.rapierWorld.world,
-        w.x,
-        w.y,
-        w.vx + kx,
-        w.vy + ky,
-        w.color
-      );
-      this.ragdolls.push(ragdoll);
-    };
-  }
-
   public setModifiers(newMods: Partial<MatchModifiers>) {
     this.modifiers = { ...this.modifiers, ...newMods };
     this.fragLimit = this.modifiers.fragLimit;
-    if (this.rapierWorld && newMods.gravity !== undefined) {
-      this.rapierWorld.setGravity(this.modifiers.gravity);
-    }
     for (const w of this.worms) {
       w.applyModifiers(this.modifiers);
     }
@@ -387,10 +337,6 @@ export class Game {
             this.worms.push(w);
           }
 
-          if (this.rapierInstance) {
-            this.initRapierPhysicsWorld(this.rapierInstance);
-          }
-
           this.isRunning = true;
           this.onStartMatchReceived?.(msg.modifiers);
         } else if (msg.type === 'STATE') {
@@ -465,10 +411,6 @@ export class Game {
       this.worms.push(clientWorm);
     }
 
-    if (this.rapierInstance) {
-      this.initRapierPhysicsWorld(this.rapierInstance);
-    }
-
     this.isRunning = false; // Waiting for Host to click Start Match in lobby
   }
 
@@ -492,10 +434,6 @@ export class Game {
       this.worms.push(w);
     }
 
-    if (this.rapierInstance) {
-      this.initRapierPhysicsWorld(this.rapierInstance);
-    }
-
     this.isRunning = true;
     this.net.broadcast({
       type: 'START_MATCH',
@@ -516,11 +454,6 @@ export class Game {
       const spawn = this.terrain.findSpawnPoint();
       worm.spawn(spawn.x, spawn.y);
       this.worms.push(worm);
-
-      if (this.rapierWorld) {
-        worm.initRapier(this.rapierWorld);
-        this.setupWormRagdoll(worm);
-      }
     }
   }
 
@@ -616,20 +549,6 @@ export class Game {
         input: this.localP1Input
       });
 
-      // Synchroniser les parois locales avec le ver client et les ragdolls
-      if (this.rapierWorld) {
-        const activeAABBs: DynamicEntityAABB[] = [];
-        const localWorm = this.getLocalWorm();
-        if (localWorm && localWorm.isAlive()) {
-          activeAABBs.push(localWorm.getAABB());
-          activeAABBs.push(...localWorm.rope.getAABBs());
-        }
-        for (const ragdoll of this.ragdolls) {
-          activeAABBs.push(...ragdoll.getAABBs());
-        }
-        this.rapierWorld.syncTerrainColliders(this.terrain, activeAABBs);
-      }
-
       // 2. Client-side local prediction: simulate local worm physics
       const localWorm = this.getLocalWorm();
       if (localWorm) {
@@ -641,20 +560,6 @@ export class Game {
         );
       }
 
-      if (this.rapierWorld) {
-        this.rapierWorld.step();
-        if (localWorm) {
-          localWorm.syncFromRapier(this.terrain);
-        }
-        this.ragdolls = this.ragdolls.filter(r => {
-          const alive = r.update(this.particles);
-          if (!alive && this.rapierWorld) {
-            r.destroy(this.rapierWorld.world);
-          }
-          return alive;
-        });
-      }
-
       // 3. Update local particles
       this.particles.update(this.terrain);
       return;
@@ -662,21 +567,6 @@ export class Game {
 
     // --- Host Authoritative Simulation ---
     const mods = this.modifiers;
-
-    // Synchronisation des parois locales dans Rapier
-    if (this.rapierWorld) {
-      const activeAABBs: DynamicEntityAABB[] = [];
-      for (const worm of this.worms) {
-        if (worm.isAlive()) {
-          activeAABBs.push(worm.getAABB());
-          activeAABBs.push(...worm.rope.getAABBs());
-        }
-      }
-      for (const ragdoll of this.ragdolls) {
-        activeAABBs.push(...ragdoll.getAABBs());
-      }
-      this.rapierWorld.syncTerrainColliders(this.terrain, activeAABBs);
-    }
 
     // 1. Update Worms (up to 8 players)
     for (const worm of this.worms) {
@@ -693,22 +583,6 @@ export class Game {
         const spawn = this.terrain.findSpawnPoint();
         worm.spawn(spawn.x, spawn.y);
       }
-    }
-
-    // Avancement de la simulation Rapier WASM
-    if (this.rapierWorld) {
-      this.rapierWorld.step();
-      for (const worm of this.worms) {
-        worm.syncFromRapier(this.terrain);
-      }
-      // Mise à jour et nettoyage des ragdolls
-      this.ragdolls = this.ragdolls.filter(r => {
-        const alive = r.update(this.particles);
-        if (!alive && this.rapierWorld) {
-          r.destroy(this.rapierWorld.world);
-        }
-        return alive;
-      });
     }
 
     // 2. Acid damage tick (every 6 frames = ~10 times/sec)
@@ -1059,11 +933,6 @@ export class Game {
     // 3. Draw Projectiles
     for (const proj of this.projectiles) {
       proj.draw(ctx);
-    }
-
-    // 3b. Draw Ragdolls (corps articulés des vers éliminés)
-    for (const ragdoll of this.ragdolls) {
-      ragdoll.draw(ctx);
     }
 
     // 4. Draw Worms (all up to 8 worms)

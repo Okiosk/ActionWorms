@@ -5,7 +5,6 @@ import { HUD } from './ui/HUD';
 import { LobbyUI, normalizeRoomId } from './ui/LobbyUI';
 import { WeaponId } from './weapons/WeaponDef';
 import { DEFAULT_LOADOUT } from './weapons/WeaponRegistry';
-import { initRapierPhysics } from './physics/RapierWorld';
 
 window.addEventListener('DOMContentLoaded', () => {
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -15,13 +14,6 @@ window.addEventListener('DOMContentLoaded', () => {
   const net = new NetworkManager();
   const game = new Game(canvas, net);
   const hud = new HUD(hudContainer);
-
-  // Initialisation asynchrone du moteur physique Rapier2D (WASM)
-  initRapierPhysics().then((rapier) => {
-    game.initRapierPhysicsWorld(rapier);
-  }).catch((err) => {
-    console.error('Erreur initialisation Rapier2D:', err);
-  });
 
   (window as any).game = game;
   (window as any).net = net;
