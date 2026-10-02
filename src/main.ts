@@ -3,6 +3,7 @@ import { GameTicker } from './engine/GameTicker';
 import { NetworkManager } from './net/NetworkManager';
 import { HUD } from './ui/HUD';
 import { LobbyUI, normalizeRoomId } from './ui/LobbyUI';
+import { ShopUI } from './ui/ShopUI';
 import { WeaponId } from './weapons/WeaponDef';
 import { DEFAULT_LOADOUT } from './weapons/WeaponRegistry';
 
@@ -14,6 +15,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const net = new NetworkManager();
   const game = new Game(canvas, net);
   const hud = new HUD(hudContainer);
+  const shop = new ShopUI(hudContainer);
 
   (window as any).game = game;
   (window as any).net = net;
@@ -181,6 +183,15 @@ window.addEventListener('DOMContentLoaded', () => {
     lobby.showGameOverModal(winner.name, isP1Winner);
   };
 
+  // 🛒 Shop: open when local worm dies, apply weapon on purchase
+  game.onLocalWormDied = (worm, respawnFrames) => {
+    shop.show(worm, respawnFrames, (weaponId: WeaponId) => {
+      // Apply chosen weapon loadout before the worm respawns
+      worm.setLoadout([weaponId]);
+      // Let the game know the respawn can proceed (timer is already counting down)
+    });
+  };
+
   // Check URL hash for direct room invite: #room=liero-xyz
   const hash = window.location.hash;
   if (hash.includes('room=')) {
@@ -193,8 +204,11 @@ window.addEventListener('DOMContentLoaded', () => {
   // Unthrottled 60Hz physics and network ticker
   const ticker = new GameTicker(() => {
     if (game.isRunning) {
-      processLocalInputs();
+      if (!shop.isVisible()) {
+        processLocalInputs();
+      }
       game.update();
+      shop.tick(); // countdown + auto-respawn if timer hits 0
     }
   });
   ticker.start();

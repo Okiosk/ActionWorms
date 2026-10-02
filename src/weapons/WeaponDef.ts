@@ -25,6 +25,7 @@ export interface WeaponDef {
   name: string;
   description: string;
   icon: string;
+  price: number;           // 0 = gratuite, >0 = coût en pièces
   reloadTime: number;      // frames between shots
   clipSize: number;
   clipReloadTime: number;

@@ -1,6 +1,6 @@
 import { CONFIG } from '../config';
 import { WeaponDef, WeaponId } from '../weapons/WeaponDef';
-import { WEAPON_REGISTRY, DEFAULT_LOADOUT } from '../weapons/WeaponRegistry';
+import { WEAPON_REGISTRY, DEFAULT_LOADOUT, FREE_WEAPONS, MONEY_START } from '../weapons/WeaponRegistry';
 import { Terrain } from './Terrain';
 import { NinjaRope } from './NinjaRope';
 import { ParticleManager } from './Particles';
@@ -42,10 +42,12 @@ export class Worm {
   public health: number = CONFIG.DEFAULT_HEALTH;
   public frags: number = 0;
   public deaths: number = 0;
+  public money: number = MONEY_START; // current money balance
   public grounded: boolean = false;
   public isDigging: boolean = false;
   public respawnTimer: number = 0;
   public freezeTimer: number = 0;     // frames remaining frozen
+  public pendingShopOpen: boolean = false; // flag for UI to open shop on next frame
   private regenAccum: number = 0;     // fractional HP accumulator for regen
 
   // Rope
@@ -75,6 +77,31 @@ export class Worm {
     this.weapons = loadout.map(id => WEAPON_REGISTRY[id]);
     this.currentWeaponIndex = 0;
     this.resetAmmo();
+  }
+
+  /** Ajoute une arme à l'arsenal sans coût (used lors du respawn) */
+  public addWeapon(id: WeaponId) {
+    const def = WEAPON_REGISTRY[id];
+    if (!def) return;
+    // Éviter les doublons
+    const idx = this.weapons.findIndex(w => w.id === id);
+    if (idx >= 0) return; // already have it
+    this.weapons.push(def);
+    this.currentWeaponIndex = this.weapons.length - 1;
+    this.resetAmmo();
+  }
+
+  /** Achète une arme si assez d'argent et l'ajoute. Retourne true si succès. */
+  public buyWeapon(id: WeaponId): boolean {
+    const def = WEAPON_REGISTRY[id];
+    if (!def) return false;
+    if (this.money < def.price) return false;
+    this.money -= def.price;
+    // Remplace tout le loadout par une seule arme achetée
+    this.weapons = [def];
+    this.currentWeaponIndex = 0;
+    this.resetAmmo();
+    return true;
   }
 
   public applyModifiers(mods: MatchModifiers) {
@@ -262,14 +289,42 @@ export class Worm {
     const maxWalkSpeed = 1.2 * this.modifiers.wormSpeed;
 
     if (this.rope.isAttached()) {
-      // Swing pumping: more force and higher cap for satisfying pendulum movement
-      const maxSwingSpeed = 2.4 * this.modifiers.wormSpeed;
+      // ── Physique de balancement pendulaire (Liero-style) ──────────────────
+      // Vecteur corde : du ver vers le crochet (direction inward)
+      const ropeDx = this.rope.hookX - this.x;
+      const ropeDy = this.rope.hookY - this.y;
+      const ropeDist = Math.hypot(ropeDx, ropeDy) || 1;
+      // Vecteur tangentiel (perpendiculaire à la corde, sens horaire si moveDir>0)
+      const tangX = -ropeDy / ropeDist;  // tangente normalisée X
+      const tangY =  ropeDx / ropeDist;  // tangente normalisée Y
+
       if (moveDir !== 0) {
-        this.vx += moveDir * (0.11 * this.modifiers.wormSpeed);
-        this.vx = Math.max(-maxSwingSpeed, Math.min(maxSwingSpeed, this.vx));
+        // Projeter la vitesse actuelle sur la tangente
+        const tangVel = this.vx * tangX + this.vy * tangY;
+        // N'ajouter de la force que si elle va dans le bon sens OU si l'élan est faible
+        // → permet l'accélération dans la direction demandée sans annuler l'élan opposé
+        const canPump = (moveDir > 0 && tangVel < 3.5 * this.modifiers.wormSpeed)
+                     || (moveDir < 0 && tangVel > -3.5 * this.modifiers.wormSpeed);
+        if (canPump) {
+          const pumpForce = 0.18 * this.modifiers.wormSpeed;
+          this.vx += moveDir * tangX * pumpForce;
+          this.vy += moveDir * tangY * pumpForce;
+        }
       }
-      // Very low air friction when swinging — preserve pendulum momentum
-      this.vx *= 0.999;
+
+      // Cap de vitesse totale lors du swing (évite les bugs)
+      const maxSwingSpeed = 5.0 * this.modifiers.wormSpeed;
+      const spd = Math.hypot(this.vx, this.vy);
+      if (spd > maxSwingSpeed) {
+        const ratio = maxSwingSpeed / spd;
+        this.vx *= ratio;
+        this.vy *= ratio;
+      }
+
+      // Friction d'air très légère — préserve l'élan pendulaire
+      this.vx *= 0.998;
+      this.vy *= 0.998;
+
     } else if (this.grounded) {
       // Ground movement: crisp acceleration capped at walking speed
       if (moveDir !== 0) {

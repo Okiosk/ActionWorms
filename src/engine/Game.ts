@@ -4,7 +4,7 @@ import { Worm, WormInput } from './Worm';
 import { Projectile } from './Projectile';
 import { ParticleManager } from './Particles';
 import { WeaponDef, WeaponId } from '../weapons/WeaponDef';
-import { WEAPON_REGISTRY, DEFAULT_LOADOUT } from '../weapons/WeaponRegistry';
+import { WEAPON_REGISTRY, DEFAULT_LOADOUT, FREE_WEAPONS, MONEY_KILL, MONEY_DEATH } from '../weapons/WeaponRegistry';
 import { NetworkManager } from '../net/NetworkManager';
 import {
   NetEvent,
@@ -68,6 +68,10 @@ export class Game {
   public onWelcomeReceived?: () => void;
   public onLobbyUpdate?: (players: LobbyPlayerInfo[], modifiers: MatchModifiers) => void;
   public onStartMatchReceived?: (modifiers: MatchModifiers) => void;
+  /** Called when the LOCAL worm dies — triggers shop UI in main.ts */
+  public onLocalWormDied?: (worm: Worm, respawnFrames: number) => void;
+  /** Called by ShopUI when player confirms weapon purchase — applied before respawn */
+  public pendingBoughtWeapon: WeaponId | null = null;
 
   constructor(canvas: HTMLCanvasElement, net: NetworkManager) {
     this.canvas = canvas;
@@ -643,6 +647,10 @@ export class Game {
               this.particles.spawnGibs(w.x, w.y);
               const killer = this.worms.find(k => k.id === attId);
               if (killer && killer.id !== w.id) {
+                // 💰 Kill reward
+                killer.money += MONEY_KILL;
+                w.deaths++;
+                w.money += MONEY_DEATH; // consolation prize
                 if (mods.gameMode === 'ffa') {
                   killer.frags++;
                   this.onKillFeed?.(killer.name, w.name);
@@ -667,7 +675,19 @@ export class Game {
                   this.onKillFeed?.(killer.name, w.name);
                 }
               } else {
+                // Suicide: small consolation
+                w.deaths++;
+                w.money += MONEY_DEATH;
                 this.onKillFeed?.(w.name, 'S\'est suicidé');
+              }
+              // 🛒 Trigger shop for LOCAL worm if it's the one that just died
+              if (w.id === this.getLocalWorm()?.id) {
+                const RESPAWN_FRAMES = 5 * 60; // 5 seconds
+                w.respawnTimer = RESPAWN_FRAMES;
+                this.onLocalWormDied?.(w, RESPAWN_FRAMES);
+              } else {
+                // Remote worms just respawn after a delay
+                w.respawnTimer = 5 * 60;
               }
             }
           },
