@@ -51,8 +51,9 @@ export class Worm {
   public waitingForShop: boolean = false;
   private regenAccum: number = 0;     // fractional HP accumulator for regen
 
-  // Rope
+  // Rope & Animation
   public rope: NinjaRope;
+  public animTimer: number = 0;
 
   // Weapons & Inventory
   public weapons: WeaponDef[] = [];
@@ -276,31 +277,29 @@ export class Worm {
     const maxWalkSpeed = 1.2 * this.modifiers.wormSpeed;
 
     if (this.rope.isAttached()) {
-      // ── Physique de balancement pendulaire (Liero-style) ──────────────────
-      // Vecteur corde : du ver vers le crochet (direction inward)
-      const ropeDx = this.rope.hookX - this.x;
-      const ropeDy = this.rope.hookY - this.y;
-      const ropeDist = Math.hypot(ropeDx, ropeDy) || 1;
-      // Vecteur tangentiel (perpendiculaire à la corde, sens horaire si moveDir>0)
-      const tangX = -ropeDy / ropeDist;  // tangente normalisée X
-      const tangY =  ropeDx / ropeDist;  // tangente normalisée Y
-
+      // ── Physique de balancement pendulaire fluide (Liero-style) ──────────
+      // 1. Accélération de balancement dans la direction demandée (Left/Right)
       if (moveDir !== 0) {
-        // Projeter la vitesse actuelle sur la tangente
-        const tangVel = this.vx * tangX + this.vy * tangY;
-        // N'ajouter de la force que si elle va dans le bon sens OU si l'élan est faible
-        // → permet l'accélération dans la direction demandée sans annuler l'élan opposé
-        const canPump = (moveDir > 0 && tangVel < 3.5 * this.modifiers.wormSpeed)
-                     || (moveDir < 0 && tangVel > -3.5 * this.modifiers.wormSpeed);
-        if (canPump) {
-          const pumpForce = 0.18 * this.modifiers.wormSpeed;
-          this.vx += moveDir * tangX * pumpForce;
-          this.vy += moveDir * tangY * pumpForce;
+        this.vx += moveDir * 0.16 * this.modifiers.wormSpeed;
+      }
+
+      // 2. Contrainte radiale de vitesse le long du filin
+      const hx = this.x - this.rope.hookX;
+      const hy = this.y - this.rope.hookY;
+      const dist = Math.hypot(hx, hy);
+      if (dist > 0.001) {
+        const ox = hx / dist;
+        const oy = hy / dist;
+        const radialVel = this.vx * ox + this.vy * oy;
+        // Supprimer la vitesse d'éloignement radial dès que la corde est tendue
+        if (dist >= this.rope.length - 1.0 && radialVel > 0) {
+          this.vx -= ox * radialVel;
+          this.vy -= oy * radialVel;
         }
       }
 
-      // Cap de vitesse totale lors du swing (évite les bugs)
-      const maxSwingSpeed = 5.0 * this.modifiers.wormSpeed;
+      // 3. Cap de vitesse totale lors du swing
+      const maxSwingSpeed = 4.2 * this.modifiers.wormSpeed;
       const spd = Math.hypot(this.vx, this.vy);
       if (spd > maxSwingSpeed) {
         const ratio = maxSwingSpeed / spd;
@@ -308,9 +307,9 @@ export class Worm {
         this.vy *= ratio;
       }
 
-      // Friction d'air très légère — préserve l'élan pendulaire
-      this.vx *= 0.998;
-      this.vy *= 0.998;
+      // Friction d'air naturelle
+      this.vx *= 0.996;
+      this.vy *= 0.996;
 
     } else if (this.grounded) {
       // Ground movement: crisp acceleration capped at walking speed
@@ -397,22 +396,14 @@ export class Worm {
     this.vx -= Math.cos(this.aimAngle) * recoilForce;
     this.vy -= Math.sin(this.aimAngle) * recoilForce;
 
-    // Play weapon sound
-    if (weapon.id === 'bazooka') sound.playBazooka();
-    else if (weapon.id === 'minigun') sound.playMinigun();
-    else if (weapon.id === 'shotgun') sound.playShotgun();
-    else if (weapon.id === 'gauss' || weapon.id === 'railgun' || weapon.id === 'sniper') sound.playRailgun();
-    else if (weapon.id === 'homing_missile' || weapon.id === 'mortar') sound.playHoming();
-    else if (weapon.id === 'bouncy_ball' || weapon.id === 'boomerang') sound.playBouncy();
-    else if (weapon.id === 'dart_gun') sound.playDart();
-    else if (weapon.id === 'vortex') sound.playVortex();
-    else if (weapon.id === 'grenade' || weapon.id === 'chiquita' || weapon.id === 'acid_bomb' || weapon.id === 'freeze_bomb') sound.playGrenadeBounce();
-    else if (weapon.id === 'laser') sound.playDart();
+    // Play spell audio (sampled + synth)
+    sound.playSpellForWeapon(weapon.id);
 
-    // Spawn muzzle sparks
-    const muzzleX = this.x + Math.cos(this.aimAngle) * 9;
-    const muzzleY = this.y + Math.sin(this.aimAngle) * 9;
-    particles.spawn(muzzleX, muzzleY, Math.cos(this.aimAngle) * 2, Math.sin(this.aimAngle) * 2, 'spark', undefined, 2, 10);
+    // Spawn magical staff flare sparks with spell element color
+    const elemColor = weapon.elementColor || '#ffd700';
+    const muzzleX = this.x + Math.cos(this.aimAngle) * 12;
+    const muzzleY = this.y + Math.sin(this.aimAngle) * 12;
+    particles.spawn(muzzleX, muzzleY, Math.cos(this.aimAngle) * 2, Math.sin(this.aimAngle) * 2, 'spark', elemColor, 2.5, 12);
 
     // Shoot weapon
     onShoot(this, weapon, this.aimAngle);
@@ -527,8 +518,6 @@ export class Worm {
     }
 
     // 3. Rope distance constraint post-movement via CCD stepped projection
-    // Instead of a single teleport snap (which can tunnel through walls), move
-    // incrementally toward the constraint point so the perimeter checks catch walls.
     if (this.rope.isAttached()) {
       const hx = this.x - this.rope.hookX;
       const hy = this.y - this.rope.hookY;
@@ -537,6 +526,12 @@ export class Worm {
       if (slack > 0.5) {
         const ox = hx / dist;
         const oy = hy / dist;
+        // Keep radial velocity in sync
+        const rVel = this.vx * ox + this.vy * oy;
+        if (rVel > 0) {
+          this.vx -= ox * rVel;
+          this.vy -= oy * rVel;
+        }
         // Move in small steps toward the constraint point
         const stepSize = 1.5;
         const snapSteps = Math.ceil(slack / stepSize);
@@ -545,13 +540,11 @@ export class Worm {
         for (let i = 0; i < snapSteps; i++) {
           const nx = this.x + snapDx;
           const ny = this.y + snapDy;
-          // Check horizontal move
           const hBlocked =
             terrain.isSolid(nx + Math.sign(snapDx) * 4.8, this.y) ||
             terrain.isSolid(nx + Math.sign(snapDx) * 3.5, this.y - 3.5) ||
             terrain.isSolid(nx + Math.sign(snapDx) * 3.5, this.y + 1.8);
           if (!hBlocked || Math.abs(snapDx) < 0.01) this.x = nx;
-          // Check vertical move
           if (snapDy > 0) {
             const feetY = this.y + snapDy + 5.0;
             const vBlocked =
@@ -576,93 +569,216 @@ export class Worm {
     this.y = Math.max(14, Math.min(terrain.height - 14, this.y));
   }
 
+  /**
+   * Renders the Little Wizard ("Petit Sorcier") holding their Magic Staff ("Bâton de Sorcier").
+   */
   public draw(ctx: CanvasRenderingContext2D) {
     if (!this.isAlive()) return;
 
-    // 1. Draw Rope first (under worm)
+    this.animTimer = (this.animTimer || 0) + 1;
+
+    // 1. Draw Arcane Tether first (under wizard)
     this.rope.draw(ctx, this.x, this.y);
 
     ctx.save();
     ctx.translate(this.x, this.y);
 
-    // 2. Draw Worm Body (segmented authentic pixel-art worm)
-    // Shadow / outline
-    ctx.fillStyle = '#111111';
+    const bobY = this.grounded ? 0 : Math.sin(this.animTimer * 0.14) * 1.2;
+    const curWeapon = this.getCurrentWeapon();
+    const spellColor = curWeapon.elementColor || '#ffaa33';
+
+    // 2. Soft Shadow on ground
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
     ctx.beginPath();
-    ctx.arc(0, 0, this.radius + 1, 0, Math.PI * 2);
+    ctx.ellipse(0, 6, 6, 2.2, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Body base
+    // 3. Wizard Robe (Robe de Mage)
     ctx.fillStyle = this.color;
     ctx.beginPath();
-    ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+    ctx.moveTo(-4, -1 + bobY);
+    ctx.lineTo(4, -1 + bobY);
+    ctx.lineTo(5.5 * this.facing, 5.5 + bobY);
+    ctx.lineTo(-5.5 * this.facing, 5.5 + bobY);
+    ctx.closePath();
     ctx.fill();
 
-    // Tail segment
-    const tailOffsetX = -this.facing * 3;
-    ctx.beginPath();
-    ctx.arc(tailOffsetX, 2, this.radius * 0.75, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Eye (white + black pupil looking forward)
-    const eyeX = this.facing * 2;
-    const eyeY = -2;
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(eyeX - 1, eyeY - 1, 3, 3);
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(eyeX + (this.facing > 0 ? 0 : -1), eyeY, 1, 2);
-
-    // 3. Draw Gun & Aim reticle
-    const curWeapon = this.getCurrentWeapon();
-    const gunLen = 7;
-    const aimCos = Math.cos(this.aimAngle);
-    const aimSin = Math.sin(this.aimAngle);
-
-    ctx.strokeStyle = '#222222';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(aimCos * gunLen, aimSin * gunLen);
-    ctx.stroke();
-
-    ctx.strokeStyle = '#cccccc';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(aimCos * gunLen, aimSin * gunLen);
-    ctx.stroke();
-
-    // Reticle
-    const reticleDist = 20;
-    const rx = aimCos * reticleDist;
-    const ry = aimSin * reticleDist;
-
-    ctx.strokeStyle = this.color;
+    // Robe golden trim (Galon d'or)
+    ctx.strokeStyle = '#ffd700';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.arc(rx, ry, 3.5, 0, Math.PI * 2);
-    ctx.moveTo(rx - 5, ry);
-    ctx.lineTo(rx + 5, ry);
-    ctx.moveTo(rx, ry - 5);
-    ctx.lineTo(rx, ry + 5);
+    ctx.moveTo(-5.5 * this.facing, 5.5 + bobY);
+    ctx.lineTo(5.5 * this.facing, 5.5 + bobY);
     ctx.stroke();
 
-    // 4. Floating Mini Health Bar above worm
-    const barWidth = 20;
-    const barHeight = 3;
+    // 4. Wizard Hood & Glowing Eyes
+    // Hood circle
+    ctx.fillStyle = this.color;
+    ctx.beginPath();
+    ctx.arc(0, -3 + bobY, 4.8, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Shadow interior of the hood
+    ctx.fillStyle = '#0f0a1c';
+    ctx.beginPath();
+    ctx.ellipse(this.facing * 1.5, -3 + bobY, 3.2, 2.8, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Glowing Sorcerer Eyes (Yeux enchantés)
+    const eyeX = this.facing * 2;
+    const eyeY = -3.2 + bobY;
+    ctx.fillStyle = '#66ffff';
+    ctx.shadowColor = '#00ffff';
+    ctx.shadowBlur = 4;
+    ctx.fillRect(eyeX - 0.5, eyeY - 0.5, 2, 1.8);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(eyeX + (this.facing > 0 ? 0.5 : -0.5), eyeY, 1, 1);
+    ctx.shadowBlur = 0;
+
+    // 5. Wizard Pointy Hat (Chapeau pointu de sorcier)
+    // Hat brim
+    ctx.fillStyle = this.color;
+    ctx.beginPath();
+    ctx.ellipse(0, -5.5 + bobY, 6.5, 2.2, -this.facing * 0.1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#110a20';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+
+    // Golden ribbon on hat
+    ctx.strokeStyle = '#ffdd44';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.ellipse(0, -6.2 + bobY, 4.2, 1.4, -this.facing * 0.1, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Pointy cone with a charming backward crook
+    ctx.fillStyle = this.color;
+    ctx.beginPath();
+    ctx.moveTo(-4, -6 + bobY);
+    ctx.quadraticCurveTo(-1, -12 + bobY, -this.facing * 4, -15.5 + bobY);
+    ctx.lineTo(2.5, -6 + bobY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#110a20';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+
+    // Golden Star at the tip of the hat
+    ctx.fillStyle = '#ffee44';
+    ctx.beginPath();
+    ctx.arc(-this.facing * 4, -15.5 + bobY, 1.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 6. Magic Staff ("Bâton de Sorcier")
+    const handX = this.facing * 2.5;
+    const handY = 0.5 + bobY;
+    const aimCos = Math.cos(this.aimAngle);
+    const aimSin = Math.sin(this.aimAngle);
+    const staffLen = 13.5;
+    const staffTipX = handX + aimCos * staffLen;
+    const staffTipY = handY + aimSin * staffLen;
+    const staffTailX = handX - aimCos * 4.5;
+    const staffTailY = handY - aimSin * 4.5;
+
+    // Staff Shaft (Bois ancien poli)
+    ctx.strokeStyle = '#5a351e';
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(staffTailX, staffTailY);
+    ctx.lineTo(staffTipX, staffTipY);
+    ctx.stroke();
+
+    // Inner highlight on staff
+    ctx.strokeStyle = '#8a5530';
+    ctx.lineWidth = 1.0;
+    ctx.beginPath();
+    ctx.moveTo(staffTailX, staffTailY);
+    ctx.lineTo(staffTipX, staffTipY);
+    ctx.stroke();
+
+    // Staff Golden Crescent Mount at tip
+    ctx.fillStyle = '#ffd700';
+    ctx.beginPath();
+    ctx.arc(staffTipX, staffTipY, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Arcane Spell Crystal (Orbe élémentaire radiant)
+    const isCasting = this.shotCooldown > 0;
+    const crystalRadius = isCasting ? 4.8 : 3.2;
+
+    ctx.shadowColor = spellColor;
+    ctx.shadowBlur = isCasting ? 14 : 7;
+    ctx.fillStyle = spellColor;
+    ctx.beginPath();
+    ctx.arc(staffTipX + aimCos * 1.5, staffTipY + aimSin * 1.5, crystalRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Blazing white hot core
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(staffTipX + aimCos * 1.5, staffTipY + aimSin * 1.5, crystalRadius * 0.45, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Wizard Hand clasping the staff
+    ctx.fillStyle = '#f5cda8';
+    ctx.beginPath();
+    ctx.arc(handX, handY, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 7. Arcane Aiming Glyph (Viseur runique)
+    const reticleDist = 22;
+    const rx = aimCos * reticleDist;
+    const ry = aimSin * reticleDist;
+    const runeRotation = this.animTimer * 0.05;
+
+    ctx.save();
+    ctx.translate(rx, ry);
+    ctx.rotate(runeRotation);
+
+    // Glowing runic circle
+    ctx.strokeStyle = spellColor;
+    ctx.shadowColor = spellColor;
+    ctx.shadowBlur = 4;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(0, 0, 4, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Cardinal rune spikes
+    for (let a = 0; a < 4; a++) {
+      const ang = (a * Math.PI) / 2;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(ang) * 4, Math.sin(ang) * 4);
+      ctx.lineTo(Math.cos(ang) * 6.5, Math.sin(ang) * 6.5);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 8. Mini Health Bar (Barre de Vitalité)
+    const barWidth = 22;
+    const barHeight = 3.5;
     const hpRatio = Math.max(0, this.health / CONFIG.DEFAULT_HEALTH);
 
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
-    ctx.fillRect(-barWidth / 2, -14, barWidth, barHeight);
+    // Parchment / stone frame
+    ctx.fillStyle = 'rgba(15, 10, 8, 0.75)';
+    ctx.fillRect(-barWidth / 2 - 1, -19, barWidth + 2, barHeight + 2);
+    ctx.strokeStyle = '#8b6f47';
+    ctx.lineWidth = 0.8;
+    ctx.strokeRect(-barWidth / 2 - 1, -19, barWidth + 2, barHeight + 2);
 
-    ctx.fillStyle = hpRatio > 0.5 ? '#33ee44' : hpRatio > 0.25 ? '#eeaa22' : '#ee2222';
-    ctx.fillRect(-barWidth / 2, -14, barWidth * hpRatio, barHeight);
+    // HP fill
+    ctx.fillStyle = hpRatio > 0.5 ? '#2bd461' : hpRatio > 0.25 ? '#ffaa22' : '#ee2b2b';
+    ctx.fillRect(-barWidth / 2, -18, barWidth * hpRatio, barHeight);
 
-    // Name label
-    ctx.font = '7px sans-serif';
+    // Sorcerer Name
+    ctx.font = '8px "MedievalSharp", "Press Start 2P", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(this.name, 0, -16);
+    ctx.fillStyle = '#ffecb3';
+    ctx.shadowColor = '#000000';
+    ctx.shadowBlur = 3;
+    ctx.fillText(`🧙 ${this.name}`, 0, -22);
 
     ctx.restore();
   }

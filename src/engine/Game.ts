@@ -858,15 +858,7 @@ export class Game {
       } else if (ev.type === 'blood') {
         this.particles.spawnBloodBurst(ev.x, ev.y, ev.count);
       } else if (ev.type === 'sound') {
-        if (ev.name === 'bazooka') sound.playBazooka();
-        else if (ev.name === 'minigun') sound.playMinigun();
-        else if (ev.name === 'shotgun') sound.playShotgun();
-        else if (ev.name === 'gauss' || ev.name === 'railgun') sound.playRailgun();
-        else if (ev.name === 'homing_missile') sound.playHoming();
-        else if (ev.name === 'bouncy_ball') sound.playBouncy();
-        else if (ev.name === 'dart_gun') sound.playDart();
-        else if (ev.name === 'vortex') sound.playVortex();
-        else if (ev.name === 'grenade' || ev.name === 'chiquita') sound.playGrenadeBounce();
+        sound.playSpellForWeapon(ev.name);
       }
     }
 

@@ -55,7 +55,7 @@ export class LobbyUI {
   private container: HTMLElement;
   private callbacks: LobbyCallbacks;
 
-  public playerName: string = localStorage.getItem('action_worms_nickname') || 'Guerrier';
+  public playerName: string = localStorage.getItem('action_worms_nickname') || 'Sorcier';
   public selectedLoadout: WeaponId[] = [...DEFAULT_LOADOUT];
   public modifiers: MatchModifiers = { ...DEFAULT_MODIFIERS };
   public connectedPlayers: LobbyPlayerInfo[] = [];
@@ -70,7 +70,7 @@ export class LobbyUI {
   }
 
   public setPlayerName(name: string) {
-    this.playerName = name.trim() || 'Guerrier';
+    this.playerName = name.trim() || 'Sorcier';
     try {
       localStorage.setItem('action_worms_nickname', this.playerName);
     } catch {}
@@ -82,17 +82,17 @@ export class LobbyUI {
     this.container.style.display = 'flex';
     this.container.innerHTML = `
       <div class="menu-card main-menu">
-        <h1 class="game-title">ACTION WORMS</h1>
-        <p class="subtitle">L'arène souterraine 100% P2P WebRTC • Jusqu'à 8 Joueurs</p>
+        <h1 class="game-title">ARCANE WORMS</h1>
+        <p class="subtitle">🧙‍♂️ Le Duel des Petits Sorciers • Multijoueur P2P WebRTC</p>
 
         <div class="player-name-row">
-          <label for="input-player-name">🪱 Votre Pseudo :</label>
-          <input type="text" id="input-player-name" maxlength="16" value="${this.escapeHtml(this.playerName)}" placeholder="Votre nom de ver" />
+          <label for="input-player-name">🧙‍♂️ Nom de votre Sorcier :</label>
+          <input type="text" id="input-player-name" maxlength="16" value="${this.escapeHtml(this.playerName)}" placeholder="Nom de sorcier (ex: Gandalf)" />
         </div>
 
         <div class="menu-buttons">
-          <button class="btn btn-accent" id="btn-host">🌐 Créer un Salon (Hôte)</button>
-          <div class="divider"><span>OU REJOINDRE DES AMIS</span></div>
+          <button class="btn btn-accent" id="btn-host">🌐 Ouvrir un Sanctuaire (Hôte)</button>
+          <div class="divider"><span>OU REJOINDRE DES CONFRÈRES</span></div>
           <div class="join-row">
             <input type="text" id="input-room-code" placeholder="Code (ex: liero-abc) ou lien" />
             <button class="btn btn-join" id="btn-join">Rejoindre</button>
@@ -101,15 +101,15 @@ export class LobbyUI {
 
         <div class="loadout-preview">
           <div class="loadout-header">
-            <span>🛒 Armurerie & Boutique en Jeu</span>
+            <span>✨ Grimoire Arcanique & Sorts en Jeu</span>
           </div>
           <p style="font-size: 15px; color: var(--text-muted); margin-top: 6px; line-height: 1.3;">
-            Sélectionnez votre arme dans la boutique avant chaque apparition ! Gagnez des pièces (💰) à chaque frag (+75) et à chaque mort (+25) pour débloquer des armes dévastatrices.
+            Choisissez votre sort dans le Grimoire avant chaque réincarnation ! Récoltez du mana (✨) à chaque ennemi terrassé (+75) et à chaque réincarnation (+25) pour invoquer des sorts dévastateurs.
           </p>
         </div>
 
         <div class="footer-tip">
-          Connexion directe entre navigateurs • Jusqu'à 8 joueurs en simultané • 0 serveur de jeu
+          Bataille magique en direct • Jusqu'à 8 sorciers en simultané • 0 serveur de jeu
         </div>
       </div>
     `;
@@ -248,7 +248,7 @@ export class LobbyUI {
               </div>
 
               <div class="mod-item">
-                <label>🪢 Grappin Ninja</label>
+                <label>✨ Lien Arcanique (Grappin)</label>
                 <select id="mod-rope">
                   <option value="normal" ${this.modifiers.ropeReach === 'normal' ? 'selected' : ''}>Normale (220px)</option>
                   <option value="infinite" ${this.modifiers.ropeReach === 'infinite' ? 'selected' : ''}>♾️ Portée Infinie</option>
@@ -256,28 +256,28 @@ export class LobbyUI {
               </div>
 
               <div class="mod-item">
-                <label>⚡ Vitesse des Vers</label>
+                <label>⚡ Vitesse des Sorciers</label>
                 <select id="mod-speed">
                   <option value="1.0" ${this.modifiers.wormSpeed === 1.0 ? 'selected' : ''}>Normale (1.0x)</option>
-                  <option value="1.5" ${this.modifiers.wormSpeed === 1.5 ? 'selected' : ''}>🔥 Turbo (1.5x)</option>
-                  <option value="0.75" ${this.modifiers.wormSpeed === 0.75 ? 'selected' : ''}>🐢 Tactique (0.75x)</option>
+                  <option value="1.5" ${this.modifiers.wormSpeed === 1.5 ? 'selected' : ''}>🔥 Célérité (1.5x)</option>
+                  <option value="0.75" ${this.modifiers.wormSpeed === 0.75 ? 'selected' : ''}>🐢 Prudence (0.75x)</option>
                 </select>
               </div>
 
               <div class="mod-item">
-                <label>❤️ Santé Max</label>
+                <label>❤️ Vitalité Max</label>
                 <select id="mod-health">
                   <option value="100" ${this.modifiers.maxHealth === 100 ? 'selected' : ''}>100 PV (Standard)</option>
-                  <option value="50" ${this.modifiers.maxHealth === 50 ? 'selected' : ''}>💀 50 PV (Hardcore)</option>
-                  <option value="200" ${this.modifiers.maxHealth === 200 ? 'selected' : ''}>🛡️ 200 PV (Titans)</option>
+                  <option value="50" ${this.modifiers.maxHealth === 50 ? 'selected' : ''}>💀 50 PV (Frêle)</option>
+                  <option value="200" ${this.modifiers.maxHealth === 200 ? 'selected' : ''}>🛡️ 200 PV (Archimage)</option>
                 </select>
               </div>
 
               <div class="mod-item">
-                <label>♾️ Munitions</label>
+                <label>♾️ Incantation (Charges)</label>
                 <select id="mod-ammo">
-                  <option value="standard" ${!this.modifiers.unlimitedAmmo ? 'selected' : ''}>Standard (Clips)</option>
-                  <option value="unlimited" ${this.modifiers.unlimitedAmmo ? 'selected' : ''}>💥 Illimitées (No Reload)</option>
+                  <option value="standard" ${!this.modifiers.unlimitedAmmo ? 'selected' : ''}>Standard (Charges)</option>
+                  <option value="unlimited" ${this.modifiers.unlimitedAmmo ? 'selected' : ''}>💥 Sorts Continus (Illimité)</option>
                 </select>
               </div>
 

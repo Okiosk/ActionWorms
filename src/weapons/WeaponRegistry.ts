@@ -1,212 +1,223 @@
 import { WeaponDef, WeaponId } from './WeaponDef';
 
-// ─── Prix ────────────────────────────────────────────────────────────────────
-// 0  = gratuite (starter weapon)
-// 50 = peu cher
-// 100–200 = moyen
-// 300–500 = puissant
-// Récompenses : +75 par kill, +25 en mourant
+// ─── Échoppe des Sorts & Grimoire Arcanique ──────────────────────────────────
+// 0  = Sort de départ (gratuit)
+// 50 = Sort mineur
+// 100–250 = Sort intermédiaire
+// 300–500 = Sort majeur dévastateur
+// Récompenses : +75 Or par Victoire/Kill, +25 Or par Trépas/Mort
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const WEAPON_REGISTRY: Record<WeaponId, WeaponDef> = {
   bazooka: {
     id: 'bazooka',
-    name: 'Bazooka',
-    description: 'Roquette lourde avec traînée de fumée et grosse détonation.',
-    icon: '🚀',
+    name: 'Boule de Feu Majeure',
+    description: 'Sphère incendiaire arcanique propulsée par le bâton, explosant en déflagration magique.',
+    icon: '🔥',
     price: 0,
     reloadTime: 38, clipSize: 1, clipReloadTime: 40, recoil: 3.5,
     projectileSpeed: 6.8, spread: 0.02, damage: 48, craterRadius: 20,
-    bounces: 0, fuseFrames: 180, gravityScale: 0.25
+    bounces: 0, fuseFrames: 180, gravityScale: 0.25,
+    elementColor: '#ff5500', spellSchool: 'Pyromancie'
   },
   minigun: {
     id: 'minigun',
-    name: 'Mini-gun',
-    description: 'Mitrailleuse à très haute cadence criblant le terrain.',
-    icon: '⚡',
+    name: 'Éclats Arcaniques',
+    description: 'Mitraille magique à très haute cadence projetant des cristaux d\'énergie pure.',
+    icon: '✨',
     price: 0,
     reloadTime: 4, clipSize: 30, clipReloadTime: 65, recoil: 0.4,
     projectileSpeed: 9.5, spread: 0.12, damage: 7, craterRadius: 4,
-    bounces: 0, fuseFrames: 90, gravityScale: 0.15
+    bounces: 0, fuseFrames: 90, gravityScale: 0.15,
+    elementColor: '#b844ff', spellSchool: 'Arcanes'
   },
   shotgun: {
     id: 'shotgun',
-    name: 'Fusil à pompe',
-    description: 'Salve de 8 plombs meurtrière à courte et moyenne portée.',
-    icon: '💥',
+    name: 'Choc d\'Étincelles',
+    description: 'Salve de 8 perles de foudre élémentaires dévastatrices à courte portée.',
+    icon: '⚡',
     price: 0,
     reloadTime: 35, clipSize: 2, clipReloadTime: 50, recoil: 4.2,
     projectileSpeed: 8.5, spread: 0.22, damage: 13, craterRadius: 4,
-    bounces: 0, fuseFrames: 60, gravityScale: 0.2, pelletCount: 8
+    bounces: 0, fuseFrames: 60, gravityScale: 0.2, pelletCount: 8,
+    elementColor: '#ffea33', spellSchool: 'Électromancie'
   },
   grenade: {
     id: 'grenade',
-    name: 'Grenade',
-    description: 'Grenade rebondissante avec mèche de 2 secondes.',
-    icon: '💣',
+    name: 'Orbe du Chaos',
+    description: 'Sphère d\'énergie tellurique instable qui rebondit avant de détoner.',
+    icon: '🔮',
     price: 50,
     reloadTime: 32, clipSize: 2, clipReloadTime: 45, recoil: 1.5,
     projectileSpeed: 5.5, spread: 0.05, damage: 42, craterRadius: 22,
-    bounces: 5, fuseFrames: 110, gravityScale: 0.75
+    bounces: 5, fuseFrames: 110, gravityScale: 0.75,
+    elementColor: '#d933ff', spellSchool: 'Chaos'
   },
   chiquita: {
     id: 'chiquita',
-    name: 'Chiquita Bomb',
-    description: 'Bombe à fragmentation qui se divise en 6 sous-bombes.',
-    icon: '🍌',
+    name: 'Comète Étoilée',
+    description: 'Orbe céleste béni se divisant en 6 sous-éclats stellaires détonants.',
+    icon: '⭐',
     price: 150,
     reloadTime: 55, clipSize: 1, clipReloadTime: 60, recoil: 2.5,
     projectileSpeed: 5.0, spread: 0.04, damage: 25, craterRadius: 16,
-    bounces: 3, fuseFrames: 75, gravityScale: 0.65, splitCount: 6
+    bounces: 3, fuseFrames: 75, gravityScale: 0.65, splitCount: 6,
+    elementColor: '#ffe044', spellSchool: 'Magie Stellaire'
   },
   gauss: {
     id: 'gauss',
-    name: 'Canon Gauss',
-    description: 'Rayon cinétique ultra-perforant qui vaporise terre et vers.',
+    name: 'Rayon Astral',
+    description: 'Faisceau de lumière astrale pure perforant la roche et les sorciers.',
     icon: '🔷',
     price: 200,
     reloadTime: 45, clipSize: 1, clipReloadTime: 55, recoil: 5.0,
     projectileSpeed: 25.0, spread: 0.0, damage: 65, craterRadius: 7,
-    bounces: 0, fuseFrames: 30, gravityScale: 0.0, piercing: true
+    bounces: 0, fuseFrames: 30, gravityScale: 0.0, piercing: true,
+    elementColor: '#33ffff', spellSchool: 'Astral'
   },
   mine: {
     id: 'mine',
-    name: 'Mine sautante',
-    description: "Piège qui explose à proximité d'un ennemi.",
-    icon: '⚠️',
+    name: 'Rune Tellurique Piégée',
+    description: 'Sceau runique magique scellé dans le sol explosant à l\'approche d\'un sorcier.',
+    icon: '🪨',
     price: 100,
     reloadTime: 40, clipSize: 2, clipReloadTime: 55, recoil: 1.0,
     projectileSpeed: 3.5, spread: 0.08, damage: 55, craterRadius: 24,
-    bounces: 3, fuseFrames: 900, gravityScale: 0.8
+    bounces: 3, fuseFrames: 900, gravityScale: 0.8,
+    elementColor: '#e08833', spellSchool: 'Géo-magie'
   },
   flamer: {
     id: 'flamer',
-    name: 'Lance-flammes',
-    description: 'Jet de flammes continues qui consume les vers.',
-    icon: '🔥',
+    name: 'Souffle du Dragon',
+    description: 'Torrent continu de flammes draconiques mystiques consumant les ennemis.',
+    icon: '🐉',
     price: 75,
     reloadTime: 3, clipSize: 40, clipReloadTime: 70, recoil: 0.2,
     projectileSpeed: 4.8, spread: 0.18, damage: 5, craterRadius: 4,
-    bounces: 0, fuseFrames: 40, gravityScale: 0.05
+    bounces: 0, fuseFrames: 40, gravityScale: 0.05,
+    elementColor: '#ff3300', spellSchool: 'Draconique'
   },
   homing_missile: {
     id: 'homing_missile',
-    name: 'Missile Guidé',
-    description: 'Roquette autoguidée traquant le ver ennemi le plus proche.',
-    icon: '🎯',
+    name: 'Feu Follet Traqueur',
+    description: 'Esprit spectral enchanté qui pourchasse automatiquement le sorcier le plus proche.',
+    icon: '👻',
     price: 200,
     reloadTime: 45, clipSize: 1, clipReloadTime: 50, recoil: 3.2,
     projectileSpeed: 5.5, spread: 0.05, damage: 46, craterRadius: 20,
-    bounces: 0, fuseFrames: 180, gravityScale: 0.1, homing: true
+    bounces: 0, fuseFrames: 180, gravityScale: 0.1, homing: true,
+    elementColor: '#33ffcc', spellSchool: 'Spiritisme'
   },
   railgun: {
     id: 'railgun',
-    name: 'Heavy Railgun',
-    description: 'Rayon cinétique supersonique perforant la terre sur toute la carte.',
-    icon: '💠',
+    name: 'Foudre Divine',
+    description: 'Éclair supersonique céleste perforant la roche sur toute la carte.',
+    icon: '⚡',
     price: 350,
     reloadTime: 50, clipSize: 1, clipReloadTime: 60, recoil: 5.5,
     projectileSpeed: 38.0, spread: 0.0, damage: 70, craterRadius: 8,
-    bounces: 0, fuseFrames: 25, gravityScale: 0.0, piercing: true
+    bounces: 0, fuseFrames: 25, gravityScale: 0.0, piercing: true,
+    elementColor: '#ffff66', spellSchool: 'Foudre Sacrée'
   },
   bouncy_ball: {
     id: 'bouncy_ball',
-    name: 'Balle Rebondissante',
-    description: "Sphère hyper-élastique qui ricoche jusqu'à 15 fois.",
-    icon: '🔮',
+    name: 'Sphère de Mana Élastique',
+    description: 'Orbe de mana concentré ricochetant avec frénésie jusqu\'à 15 fois.',
+    icon: '🟣',
     price: 125,
-    reloadTime: 22, clipSize: 3, clipReloadTime: 45, recoil: 1.8,
-    projectileSpeed: 9.0, spread: 0.08, damage: 35, craterRadius: 14,
-    bounces: 15, fuseFrames: 220, gravityScale: 0.45
+    reloadTime: 22, clipSize: 3, clipReloadTime: 45, recoil: 1.2,
+    projectileSpeed: 7.2, spread: 0.06, damage: 16, craterRadius: 8,
+    bounces: 15, fuseFrames: 220, gravityScale: 0.45,
+    elementColor: '#cc33ff', spellSchool: 'Éther'
   },
   dart_gun: {
     id: 'dart_gun',
-    name: 'Fléchettes Toxiques',
-    description: 'Salve de 3 aiguilles empoisonnées perforantes.',
-    icon: '💉',
+    name: 'Flèches d\'Ombre Maudites',
+    description: 'Salve de 3 pointes d\'ombre empoisonnées perforantes à vélocité foudroyante.',
+    icon: '🗡️',
     price: 100,
-    reloadTime: 20, clipSize: 3, clipReloadTime: 40, recoil: 1.0,
-    projectileSpeed: 14.0, spread: 0.08, damage: 24, craterRadius: 3,
-    bounces: 0, fuseFrames: 80, gravityScale: 0.15, pelletCount: 3, toxic: true
+    reloadTime: 18, clipSize: 6, clipReloadTime: 45, recoil: 1.0,
+    projectileSpeed: 11.0, spread: 0.14, damage: 9, craterRadius: 3,
+    bounces: 0, fuseFrames: 70, gravityScale: 0.1, pelletCount: 3, toxic: true,
+    elementColor: '#33cc55', spellSchool: 'Nécromancie'
   },
   vortex: {
     id: 'vortex',
-    name: 'Canon Vortex',
-    description: "Singularité gravitationnelle aspirant vers et débris avant d'imploser.",
+    name: 'Singularité du Néant',
+    description: 'Faille dimensionnelle aspirant sorciers et débris avant de s\'effondrer.',
     icon: '🌀',
     price: 400,
     reloadTime: 65, clipSize: 1, clipReloadTime: 75, recoil: 4.0,
-    projectileSpeed: 4.2, spread: 0.04, damage: 60, craterRadius: 28,
-    bounces: 0, fuseFrames: 100, gravityScale: 0.05, vortex: true
+    projectileSpeed: 4.5, spread: 0.02, damage: 35, craterRadius: 28,
+    bounces: 1, fuseFrames: 85, gravityScale: 0.35, vortex: true,
+    elementColor: '#7700ee', spellSchool: 'Néant'
   },
-
-  // ─── NEW WEAPONS ───────────────────────────────────────────────────────────
-
   sniper: {
     id: 'sniper',
-    name: 'Sniper',
-    description: 'Balle ultra-précise et ultra-rapide. 1 coup, 1 mort.',
-    icon: '🎯',
+    name: 'Javelot Spectral',
+    description: 'Trait d\'énergie mystique rectiligne instantané. Un sort fatal à longue portée.',
+    icon: '🏹',
     price: 250,
-    reloadTime: 80, clipSize: 1, clipReloadTime: 90, recoil: 6.0,
+    reloadTime: 55, clipSize: 1, clipReloadTime: 60, recoil: 4.5,
     projectileSpeed: 32.0, spread: 0.0, damage: 85, craterRadius: 6,
-    bounces: 0, fuseFrames: 35, gravityScale: 0.03, piercing: false
+    bounces: 0, fuseFrames: 40, gravityScale: 0.02, piercing: true,
+    elementColor: '#ffffff', spellSchool: 'Divination'
   },
-
   acid_bomb: {
     id: 'acid_bomb',
-    name: 'Bombe Acide',
-    description: "Crée une flaque d'acide corrosive sur le terrain à l'impact.",
+    name: 'Fiole d\'Alchimiste',
+    description: 'Fiole de poison corrosif laissant une mare d\'acide brûlant sur le terrain.',
     icon: '🧪',
     price: 175,
-    reloadTime: 45, clipSize: 2, clipReloadTime: 60, recoil: 2.0,
-    projectileSpeed: 5.0, spread: 0.06, damage: 15, craterRadius: 10,
-    bounces: 2, fuseFrames: 120, gravityScale: 0.6, acidPool: true
+    reloadTime: 40, clipSize: 1, clipReloadTime: 50, recoil: 2.0,
+    projectileSpeed: 6.0, spread: 0.05, damage: 25, craterRadius: 14,
+    bounces: 2, fuseFrames: 90, gravityScale: 0.6, acidPool: true,
+    elementColor: '#44ff22', spellSchool: 'Alchimie'
   },
-
   boomerang: {
     id: 'boomerang',
-    name: 'Boomerang',
-    description: 'Revient vers le lanceur après 1.5s. Attention à ne pas se faire toucher.',
+    name: 'Chakram Envoûté',
+    description: 'Lame mystique tournoyante revenant vers son invocateur après 1.5 seconde.',
     icon: '🪃',
     price: 75,
-    reloadTime: 30, clipSize: 2, clipReloadTime: 45, recoil: 1.2,
-    projectileSpeed: 7.0, spread: 0.03, damage: 30, craterRadius: 12,
-    bounces: 0, fuseFrames: 90, gravityScale: 0.05, boomerang: true
+    reloadTime: 30, clipSize: 1, clipReloadTime: 40, recoil: 1.0,
+    projectileSpeed: 7.0, spread: 0.02, damage: 32, craterRadius: 10,
+    bounces: 0, fuseFrames: 90, gravityScale: 0.15, boomerang: true,
+    elementColor: '#ffaa33', spellSchool: 'Enchantement'
   },
-
   mortar: {
     id: 'mortar',
-    name: 'Mortier',
-    description: "Obus à forte parabole et grand rayon d'explosion.",
-    icon: '💥',
+    name: 'Météorite Antique',
+    description: 'Comète magique en cloche provoquant une colossale explosion tellurique.',
+    icon: '☄️',
     price: 300,
-    reloadTime: 55, clipSize: 1, clipReloadTime: 65, recoil: 3.0,
-    projectileSpeed: 4.5, spread: 0.04, damage: 55, craterRadius: 30,
-    bounces: 0, fuseFrames: 150, gravityScale: 1.2
+    reloadTime: 60, clipSize: 1, clipReloadTime: 70, recoil: 4.0,
+    projectileSpeed: 7.5, spread: 0.03, damage: 60, craterRadius: 30,
+    bounces: 0, fuseFrames: 180, gravityScale: 1.2,
+    elementColor: '#ff6600', spellSchool: 'Cosmique'
   },
-
   freeze_bomb: {
     id: 'freeze_bomb',
-    name: 'Bombe Givrante',
-    description: 'Gèle tous les vers à proximité, les ralentissant pendant 3s.',
+    name: 'Orbe de Givre Éternel',
+    description: 'Blizzard concentré congelant tous les sorciers à proximité pendant 3 secondes.',
     icon: '❄️',
     price: 225,
     reloadTime: 50, clipSize: 1, clipReloadTime: 65, recoil: 1.8,
     projectileSpeed: 5.5, spread: 0.05, damage: 20, craterRadius: 8,
-    bounces: 1, fuseFrames: 100, gravityScale: 0.5, freezeDuration: 180
+    bounces: 1, fuseFrames: 100, gravityScale: 0.5, freezeDuration: 180,
+    elementColor: '#66eeff', spellSchool: 'Cryomancie'
   },
-
   laser: {
     id: 'laser',
-    name: 'Laser',
-    description: 'Rayon laser instantané continu. Tenu = dégâts constants.',
+    name: 'Faisceau Arcanique Continu',
+    description: 'Rayon magique instantané continu consumant les ennemis.',
     icon: '🔴',
     price: 500,
     reloadTime: 2, clipSize: 60, clipReloadTime: 80, recoil: 0.1,
     projectileSpeed: 999, spread: 0.0, damage: 4, craterRadius: 3,
-    bounces: 0, fuseFrames: 2, gravityScale: 0.0, laser: true, piercing: true
-  },
+    bounces: 0, fuseFrames: 2, gravityScale: 0.0, laser: true, piercing: true,
+    elementColor: '#ff2255', spellSchool: 'Haute Magie'
+  }
 };
 
 export const ALL_WEAPON_IDS: WeaponId[] = [
@@ -216,13 +227,13 @@ export const ALL_WEAPON_IDS: WeaponId[] = [
   'sniper', 'acid_bomb', 'boomerang', 'mortar', 'freeze_bomb', 'laser'
 ];
 
-/** Armes gratuites disponibles dès le départ */
+/** Sorts gratuits de départ */
 export const FREE_WEAPONS: WeaponId[] = ['bazooka', 'minigun', 'shotgun'];
 
-/** Starter loadout (1 arme par défaut) */
+/** Sort par défaut */
 export const DEFAULT_LOADOUT: WeaponId[] = ['bazooka'];
 
-/** Récompenses en pièces */
-export const MONEY_KILL = 75;   // argent gagné pour un kill
-export const MONEY_DEATH = 25;  // argent consolation à chaque mort
-export const MONEY_START = 100; // argent de départ
+/** Récompenses en Or / Mana */
+export const MONEY_KILL = 75;   // Or gagné pour une victoire/kill
+export const MONEY_DEATH = 25;  // Or consolation en mourant
+export const MONEY_START = 100; // Or de départ

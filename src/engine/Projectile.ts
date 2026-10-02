@@ -112,20 +112,27 @@ export class Projectile {
       }
     }
 
-    // Tail particle FX
-    if (this.weapon.id === 'bazooka' || this.weapon.id === 'homing_missile') {
-      particles.spawn(this.x, this.y, -this.vx * 0.2, -this.vy * 0.2, 'smoke', undefined, 2.5, 30);
-      if (this.weapon.id === 'homing_missile') {
-        particles.spawn(this.x, this.y, (Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5, 'fire', undefined, 2, 15);
-      }
-    } else if (this.weapon.id === 'flamer') {
-      particles.spawn(this.x, this.y, (Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5, 'fire', undefined, 3, 25);
-    } else if (this.weapon.id === 'railgun') {
-      particles.spawn(this.x, this.y, 0, 0, 'spark', '#22e8dd', 2.0, 15);
+    // Tail particle FX (Magical Spell Trails)
+    if (this.weapon.id === 'bazooka' || this.weapon.id === 'flamer') {
+      particles.spawn(this.x, this.y, (Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.4, 'fire', undefined, 2.5, 20);
+      particles.spawn(this.x, this.y, -this.vx * 0.15, -this.vy * 0.15, 'smoke', undefined, 2.0, 25);
+    } else if (this.weapon.id === 'mortar') {
+      particles.spawn(this.x, this.y, -this.vx * 0.2, -this.vy * 0.2, 'smoke', undefined, 3.0, 30);
+      particles.spawn(this.x, this.y, (Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5, 'fire', undefined, 2.0, 15);
+    } else if (this.weapon.id === 'homing_missile') {
+      particles.spawn(this.x, this.y, (Math.random() - 0.5) * 0.3, (Math.random() - 0.5) * 0.3, 'spark', '#38bdf8', 2.0, 18);
+    } else if (this.weapon.id === 'railgun' || this.weapon.id === 'gauss') {
+      particles.spawn(this.x, this.y, 0, 0, 'spark', this.weapon.elementColor || '#a855f7', 2.0, 15);
     } else if (this.weapon.id === 'bouncy_ball') {
-      particles.spawn(this.x, this.y, -this.vx * 0.1, -this.vy * 0.1, 'spark', '#b844ff', 1.8, 12);
+      particles.spawn(this.x, this.y, -this.vx * 0.1, -this.vy * 0.1, 'spark', '#d946ef', 1.8, 12);
     } else if (this.weapon.id === 'vortex') {
-      particles.spawn(this.x, this.y, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2, 'smoke', '#8822cc', 3.0, 20);
+      particles.spawn(this.x, this.y, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2, 'smoke', '#7c3aed', 3.0, 20);
+    } else if (this.weapon.id === 'acid_bomb') {
+      particles.spawn(this.x, this.y, (Math.random() - 0.5) * 0.5, -0.5, 'spark', '#22c55e', 2.0, 15);
+    } else if (this.weapon.id === 'freeze_bomb') {
+      particles.spawn(this.x, this.y, (Math.random() - 0.5) * 0.5, -0.5, 'spark', '#bae6fd', 1.8, 15);
+    } else if (this.weapon.id === 'boomerang') {
+      particles.spawn(this.x, this.y, 0, 0, 'spark', '#f59e0b', 1.5, 10);
     }
 
     // Proximity mine trigger
@@ -257,10 +264,10 @@ export class Projectile {
     // Audio & Visual FX
     if (this.weapon.craterRadius >= 10) {
       sound.playExplosion(this.weapon.craterRadius);
-      particles.spawnExplosionFX(this.x, this.y, this.weapon.craterRadius);
+      particles.spawnExplosionFX(this.x, this.y, this.weapon.craterRadius, this.weapon.elementColor);
     } else {
       sound.playExplosion(10);
-      particles.spawn(this.x, this.y, 0, 0, 'dirt', undefined, 2, 20);
+      particles.spawn(this.x, this.y, 0, 0, 'spark', this.weapon.elementColor || '#ffd700', 2, 20);
     }
 
     // Damage & Knockback to worms in blast radius
@@ -306,148 +313,270 @@ export class Projectile {
     if (!this.alive) return;
 
     ctx.save();
+    const elemColor = this.weapon.elementColor || '#ffd700';
+
     if (this.weapon.id === 'bazooka') {
+      // Boule de Feu Majeure (Great Fireball)
+      ctx.shadowColor = '#ff4400';
+      ctx.shadowBlur = 10;
+      // Outer fire halo
+      ctx.fillStyle = '#ff4400';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 6.5, 0, Math.PI * 2);
+      ctx.fill();
+      // Mid flame
+      ctx.fillStyle = '#ffaa00';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      // Inner glowing core
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (this.weapon.id === 'mortar') {
+      // Météore Déferlant (Falling Meteor)
       const angle = Math.atan2(this.vy, this.vx);
       ctx.translate(this.x, this.y);
       ctx.rotate(angle);
-      // Rocket body
-      ctx.fillStyle = '#666666';
-      ctx.fillRect(-5, -2, 8, 4);
-      // Warhead tip
-      ctx.fillStyle = '#ff2222';
+      ctx.shadowColor = '#ff6600';
+      ctx.shadowBlur = 8;
+      ctx.fillStyle = '#4a2511';
       ctx.beginPath();
-      ctx.moveTo(3, -2);
-      ctx.lineTo(6, 0);
-      ctx.lineTo(3, 2);
+      ctx.arc(0, 0, 6.5, 0, Math.PI * 2);
       ctx.fill();
+      ctx.fillStyle = '#ff6600';
+      ctx.fillRect(-3, -2, 6, 4);
+      ctx.fillStyle = '#ffee44';
+      ctx.fillRect(-1, -1, 3, 2);
     } else if (this.weapon.id === 'grenade' || this.weapon.id === 'chiquita') {
-      ctx.fillStyle = this.weapon.id === 'chiquita' ? '#eedd22' : '#228833';
+      // Orbe Instable / Orbe de Scission (Arcane / Celestial Orbs)
+      const pulse = 0.5 + 0.5 * Math.sin(Date.now() * 0.015);
+      const isChiquita = this.weapon.id === 'chiquita';
+      const orbColor = isChiquita ? '#ffd700' : '#a855f7';
+      ctx.shadowColor = orbColor;
+      ctx.shadowBlur = 8;
+      ctx.fillStyle = orbColor;
       ctx.beginPath();
-      ctx.arc(this.x, this.y, this.isSubCluster ? 2.5 : 4, 0, Math.PI * 2);
+      ctx.arc(this.x, this.y, this.isSubCluster ? 3.0 : 5.0, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.isSubCluster ? 1.5 : 2.5 + pulse * 0.8, 0, Math.PI * 2);
+      ctx.fill();
     } else if (this.weapon.id === 'mine') {
-      ctx.fillStyle = this.armed ? (Math.floor(Date.now() / 200) % 2 === 0 ? '#ff1111' : '#333333') : '#888888';
+      // Rune Tellurique (Explosive Rune)
+      const pulse = Math.floor(Date.now() / 180) % 2 === 0;
+      ctx.shadowColor = this.armed ? '#ef4444' : '#8b5cf6';
+      ctx.shadowBlur = this.armed ? 8 : 4;
+      ctx.strokeStyle = this.armed ? (pulse ? '#ff3333' : '#aa0000') : '#8b5cf6';
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.arc(this.x, this.y, 4, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.arc(this.x, this.y, 5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(this.x - 3, this.y);
+      ctx.lineTo(this.x + 3, this.y);
+      ctx.moveTo(this.x, this.y - 3);
+      ctx.lineTo(this.x, this.y + 3);
+      ctx.stroke();
     } else if (this.weapon.id === 'gauss') {
-      ctx.strokeStyle = '#66e0ff';
-      ctx.lineWidth = 2.5;
+      // Rayon Astral (Astral Ray)
+      ctx.shadowColor = '#38bdf8';
+      ctx.shadowBlur = 10;
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 3.0;
       ctx.beginPath();
-      ctx.moveTo(this.x - this.vx * 0.8, this.y - this.vy * 0.8);
+      ctx.moveTo(this.x - this.vx * 0.85, this.y - this.vy * 0.85);
       ctx.lineTo(this.x, this.y);
       ctx.stroke();
-    } else if (this.weapon.id === 'homing_missile') {
-      const angle = Math.atan2(this.vy, this.vx);
-      ctx.translate(this.x, this.y);
-      ctx.rotate(angle);
-      // Homing missile body
-      ctx.fillStyle = '#225588';
-      ctx.fillRect(-6, -2.5, 9, 5);
-      // Nose cone
-      ctx.fillStyle = '#ffcc00';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.fillStyle = '#ffffff';
       ctx.beginPath();
-      ctx.moveTo(3, -2.5);
-      ctx.lineTo(7, 0);
-      ctx.lineTo(3, 2.5);
+      ctx.arc(this.x, this.y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (this.weapon.id === 'homing_missile') {
+      // Feu Follet Traqueur (Seeking Wisp)
+      const pulse = 0.5 + 0.5 * Math.sin(Date.now() * 0.02);
+      ctx.shadowColor = '#00f0ff';
+      ctx.shadowBlur = 12;
+      ctx.fillStyle = `rgba(0, 240, 255, ${0.45 + pulse * 0.35})`;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 6.0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#e0ffff';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 1.5, 0, Math.PI * 2);
       ctx.fill();
     } else if (this.weapon.id === 'railgun') {
-      ctx.strokeStyle = '#22e8dd';
-      ctx.lineWidth = 3.5;
+      // Foudre Divine (Divine Lightning)
+      ctx.shadowColor = '#c084fc';
+      ctx.shadowBlur = 12;
+      ctx.strokeStyle = '#a855f7';
+      ctx.lineWidth = 4.0;
       ctx.beginPath();
       ctx.moveTo(this.x - this.vx * 0.9, this.y - this.vy * 0.9);
       ctx.lineTo(this.x, this.y);
       ctx.stroke();
       ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 1.8;
       ctx.stroke();
     } else if (this.weapon.id === 'bouncy_ball') {
-      ctx.fillStyle = '#b844ff';
+      // Sphère Chaotique (Chaos Sphere)
+      ctx.shadowColor = '#d946ef';
+      ctx.shadowBlur = 9;
+      ctx.fillStyle = '#d946ef';
       ctx.beginPath();
-      ctx.arc(this.x, this.y, 4, 0, Math.PI * 2);
+      ctx.arc(this.x, this.y, 4.5, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = '#ffffff';
+      ctx.strokeStyle = '#fbcfe8';
       ctx.lineWidth = 1.5;
       ctx.stroke();
     } else if (this.weapon.id === 'dart_gun') {
+      // Dards Empoisonnés (Venomous Darts)
       const angle = Math.atan2(this.vy, this.vx);
       ctx.translate(this.x, this.y);
       ctx.rotate(angle);
-      ctx.fillStyle = '#44ff66';
-      ctx.fillRect(-4, -1, 8, 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(4, -0.5, 2, 1);
+      ctx.shadowColor = '#22c55e';
+      ctx.shadowBlur = 6;
+      ctx.fillStyle = '#15803d';
+      ctx.fillRect(-5, -1.2, 9, 2.4);
+      ctx.fillStyle = '#4ade80';
+      ctx.fillRect(4, -1, 3, 2);
     } else if (this.weapon.id === 'vortex') {
-      // Swirling singularity
-      ctx.fillStyle = '#110022';
+      // Singularité du Néant (Void Singularity)
+      const rot = (Date.now() * 0.008) % (Math.PI * 2);
+      ctx.translate(this.x, this.y);
+      ctx.rotate(rot);
+      ctx.shadowColor = '#a855f7';
+      ctx.shadowBlur = 14;
+      ctx.strokeStyle = '#7c3aed';
+      ctx.lineWidth = 2.5;
       ctx.beginPath();
-      ctx.arc(this.x, this.y, 6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = '#b844ff';
-      ctx.lineWidth = 2;
+      ctx.arc(0, 0, 7.0, 0, Math.PI * 1.6);
       ctx.stroke();
-    } else if (this.weapon.id === 'flamer') {
-      ctx.fillStyle = '#ff6600';
+      ctx.fillStyle = '#060010';
       ctx.beginPath();
-      ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
+      ctx.arc(0, 0, 4.8, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (this.weapon.id === 'flamer') {
+      // Souffle du Dragon (Dragon's Breath)
+      ctx.shadowColor = '#f97316';
+      ctx.shadowBlur = 8;
+      ctx.fillStyle = '#ea580c';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 3.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fef08a';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 1.8, 0, Math.PI * 2);
       ctx.fill();
     } else if (this.weapon.id === 'laser') {
-      ctx.strokeStyle = '#ff2222';
-      ctx.lineWidth = 2;
-      ctx.shadowColor = '#ff6666';
-      ctx.shadowBlur = 6;
+      // Faisceau Lunaire (Lunar Beam)
+      ctx.strokeStyle = '#f43f5e';
+      ctx.lineWidth = 2.8;
+      ctx.shadowColor = '#fb7185';
+      ctx.shadowBlur = 8;
       ctx.beginPath();
       ctx.moveTo(this.x - this.vx * 8, this.y - this.vy * 8);
       ctx.lineTo(this.x, this.y);
       ctx.stroke();
-      ctx.shadowBlur = 0;
     } else if (this.weapon.id === 'acid_bomb') {
-      ctx.fillStyle = '#22dd22';
-      ctx.beginPath();
-      ctx.arc(this.x, this.y, 5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = '#00ff00';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-    } else if (this.weapon.id === 'freeze_bomb') {
-      ctx.fillStyle = '#aaddff';
-      ctx.beginPath();
-      ctx.arc(this.x, this.y, 5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-    } else if (this.weapon.id === 'mortar') {
-      ctx.fillStyle = '#886644';
-      ctx.beginPath();
-      ctx.arc(this.x, this.y, 5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-    } else if (this.weapon.id === 'boomerang') {
+      // Fiole Alchimique (Alchemical Flask)
       const angle = Math.atan2(this.vy, this.vx);
       ctx.translate(this.x, this.y);
       ctx.rotate(angle);
-      ctx.fillStyle = '#cc8822';
+      ctx.fillStyle = '#92400e';
+      ctx.fillRect(3, -1.2, 2.5, 2.4);
+      ctx.shadowColor = '#22c55e';
+      ctx.shadowBlur = 7;
+      ctx.fillStyle = '#16a34a';
       ctx.beginPath();
-      ctx.ellipse(0, 0, 7, 3, 0, 0, Math.PI * 2);
+      ctx.arc(0, 0, 5.0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#bbf7d0';
+      ctx.lineWidth = 1.0;
+      ctx.stroke();
+    } else if (this.weapon.id === 'freeze_bomb') {
+      // Nova de Givre (Frost Nova)
+      ctx.translate(this.x, this.y);
+      ctx.rotate((Date.now() * 0.005) % (Math.PI * 2));
+      ctx.shadowColor = '#38bdf8';
+      ctx.shadowBlur = 8;
+      ctx.fillStyle = '#bae6fd';
+      ctx.beginPath();
+      ctx.moveTo(0, -6);
+      ctx.lineTo(2, -2);
+      ctx.lineTo(6, 0);
+      ctx.lineTo(2, 2);
+      ctx.lineTo(0, 6);
+      ctx.lineTo(-2, 2);
+      ctx.lineTo(-6, 0);
+      ctx.lineTo(-2, -2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(0, 0, 2.0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (this.weapon.id === 'boomerang') {
+      // Lame Spirituelle (Spirit Blade)
+      ctx.translate(this.x, this.y);
+      ctx.rotate((Date.now() * 0.02) % (Math.PI * 2));
+      ctx.shadowColor = '#f59e0b';
+      ctx.shadowBlur = 8;
+      ctx.fillStyle = '#f59e0b';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 7.5, 2.8, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fef08a';
+      ctx.beginPath();
+      ctx.arc(0, 0, 2.2, 0, Math.PI * 2);
       ctx.fill();
     } else if (this.weapon.id === 'sniper') {
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1.5;
+      // Éclair de Jugement (Judgment Bolt)
+      ctx.shadowColor = '#fbbf24';
+      ctx.shadowBlur = 10;
+      ctx.strokeStyle = '#fef08a';
+      ctx.lineWidth = 2.4;
       ctx.beginPath();
-      ctx.moveTo(this.x - this.vx * 0.5, this.y - this.vy * 0.5);
+      ctx.moveTo(this.x - this.vx * 0.6, this.y - this.vy * 0.6);
       ctx.lineTo(this.x, this.y);
       ctx.stroke();
-    } else {
-      // Bullets (minigun, shotgun)
-      ctx.fillStyle = '#ffee66';
+    } else if (this.weapon.id === 'shotgun') {
+      // Éclats Arcaniques (Arcane Shards)
+      const angle = Math.atan2(this.vy, this.vx);
+      ctx.translate(this.x, this.y);
+      ctx.rotate(angle);
+      ctx.shadowColor = '#c084fc';
+      ctx.shadowBlur = 5;
+      ctx.fillStyle = '#a855f7';
       ctx.beginPath();
-      ctx.arc(this.x, this.y, 2, 0, Math.PI * 2);
+      ctx.moveTo(3, 0);
+      ctx.lineTo(0, -1.8);
+      ctx.lineTo(-3, 0);
+      ctx.lineTo(0, 1.8);
+      ctx.closePath();
+      ctx.fill();
+    } else if (this.weapon.id === 'minigun') {
+      // Choc d'Étincelles (Spark Jolt)
+      ctx.shadowColor = '#fbbf24';
+      ctx.shadowBlur = 4;
+      ctx.fillStyle = '#fde047';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // Spark générique aux couleurs du sort
+      ctx.fillStyle = elemColor;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 2.2, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.restore();

@@ -3,6 +3,8 @@ export class SoundEffects {
   private noiseBuffer: AudioBuffer | null = null;
   public enabled: boolean = true;
   public volume: number = 0.5;
+  private spellBuffers: (AudioBuffer | null)[] = [null, null, null, null, null];
+  private isPreloading: boolean = false;
 
   constructor() {
     // Lazily initialized on first user gesture
@@ -13,9 +15,32 @@ export class SoundEffects {
       const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ctx = new AudioCtxClass();
       this.generateNoiseBuffer();
+      this.preloadSpellSounds();
     }
     if (this.ctx.state === 'suspended') {
       this.ctx.resume();
+    }
+  }
+
+  private preloadSpellSounds() {
+    if (this.isPreloading || !this.ctx) return;
+    this.isPreloading = true;
+    const base = (import.meta as any).env?.BASE_URL || './';
+    for (let i = 1; i <= 5; i++) {
+      const idx = i - 1;
+      const url = `${base}assets/audio/spell${i}.ogg`;
+      fetch(url)
+        .then(res => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.arrayBuffer();
+        })
+        .then(ab => this.ctx?.decodeAudioData(ab))
+        .then(buf => {
+          if (buf) this.spellBuffers[idx] = buf;
+        })
+        .catch(() => {
+          // Fallback gracefully if network/offline
+        });
     }
   }
 
@@ -403,6 +428,68 @@ export class SoundEffects {
     gain.connect(this.ctx.destination);
     osc.start(t);
     osc.stop(t + 0.6);
+  }
+
+  public playSpellSample(index: number = 0, volMultiplier: number = 1.0) {
+    if (!this.enabled) return;
+    this.initCtx();
+    if (!this.ctx) return;
+    const buf = this.spellBuffers[index % 5];
+    if (buf) {
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(0.55 * this.volume * volMultiplier, this.ctx.currentTime);
+      src.connect(gain);
+      gain.connect(this.ctx.destination);
+      src.start();
+    }
+  }
+
+  public playSpellForWeapon(weaponId: string) {
+    if (!this.enabled) return;
+    this.initCtx();
+
+    // Fire / Meteor / Dragon
+    if (weaponId === 'bazooka' || weaponId === 'mortar' || weaponId === 'flamer') {
+      this.playSpellSample(0, 1.1);
+      this.playBazooka();
+    }
+    // Arcane / Spark / Minigun / Shotgun
+    else if (weaponId === 'minigun' || weaponId === 'shotgun') {
+      this.playSpellSample(1, 0.9);
+      if (weaponId === 'minigun') this.playMinigun();
+      else this.playShotgun();
+    }
+    // Astral / Divine / Railgun / Gauss / Sniper / Laser
+    else if (weaponId === 'gauss' || weaponId === 'railgun' || weaponId === 'sniper' || weaponId === 'laser') {
+      this.playSpellSample(3, 1.2);
+      this.playRailgun();
+    }
+    // Frost / Dart
+    else if (weaponId === 'freeze_bomb' || weaponId === 'dart_gun') {
+      this.playSpellSample(2, 1.0);
+      this.playDart();
+    }
+    // Void / Wisp / Chaos / Acid / Grenade / Mine / Boomerang / Bouncy
+    else if (weaponId === 'vortex' || weaponId === 'homing_missile' || weaponId === 'mine') {
+      this.playSpellSample(4, 1.1);
+      if (weaponId === 'vortex') this.playVortex();
+      else if (weaponId === 'homing_missile') this.playHoming();
+      else this.playGrenadeBounce();
+    }
+    else if (weaponId === 'acid_bomb') {
+      this.playSpellSample(4, 1.0);
+      this.playGrenadeBounce();
+    }
+    else if (weaponId === 'bouncy_ball' || weaponId === 'boomerang') {
+      this.playSpellSample(1, 0.9);
+      this.playBouncy();
+    }
+    else {
+      this.playSpellSample(1, 0.8);
+      this.playGrenadeBounce();
+    }
   }
 }
 

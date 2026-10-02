@@ -13,6 +13,7 @@ export class NinjaRope {
   public length: number = 0;
   public maxLength: number = CONFIG.ROPE_MAX_LENGTH;
   public isInfinite: boolean = false;
+  private animTimer: number = 0;
 
   public setModifiers(reach: 'normal' | 'infinite') {
     this.isInfinite = reach === 'infinite';
@@ -23,7 +24,7 @@ export class NinjaRope {
     this.state = 'flying';
     this.hookX = originX;
     this.hookY = originY;
-    const speed = 15.5;
+    const speed = 16.0;
     this.hookVx = Math.cos(angle) * speed;
     this.hookVy = Math.sin(angle) * speed;
     this.length = 0;
@@ -49,6 +50,7 @@ export class NinjaRope {
     reelOut: boolean
   ) {
     if (this.state === 'idle') return;
+    this.animTimer++;
 
     if (this.state === 'flying') {
       // Step along hook trajectory with sub-stepping for precise collision
@@ -69,7 +71,7 @@ export class NinjaRope {
         if (terrain.isSolid(this.hookX, this.hookY)) {
           // Latch onto terrain!
           this.state = 'attached';
-          this.length = Math.max(22, dist);
+          this.length = Math.max(20, dist);
           sound.playRopeLatch();
           return;
         }
@@ -90,43 +92,88 @@ export class NinjaRope {
       const ox = hx / dist; // outward unit vector pointing from hook to worm
       const oy = hy / dist;
 
-      // 1. Reeling controls:
-      // Z / Jump -> reelIn (climb up toward anchor smoothly at constant speed)
-      // S / Down -> reelOut (descend smoothly)
-      const reelSpeed = 1.7;
+      // 1. Smooth, constant-speed reeling controls without propulsion:
+      // ReelIn (Z / W / Up) climbs smoothly at constant speed
+      // ReelOut (S / Down) descends smoothly
+      const reelInSpeed = 1.6;
+      const reelOutSpeed = 1.8;
+
       if (reelIn) {
-        this.length = Math.max(16, this.length - reelSpeed);
+        this.length = Math.max(16, this.length - reelInSpeed);
+        // Smoothly pull worm position inward to prevent slack accumulation
+        if (dist > this.length) {
+          const pull = Math.min(dist - this.length, reelInSpeed);
+          worm.x -= ox * pull;
+          worm.y -= oy * pull;
+        }
       } else if (reelOut) {
-        this.length = Math.min(this.maxLength, this.length + reelSpeed);
+        this.length = Math.min(this.maxLength, this.length + reelOutSpeed);
       }
 
       // 2. Rigid Inelastic Distance Constraint:
-      // Eliminate outward velocity when rope is taut (prevents stretching),
-      // but NEVER clamp inward/tangential velocity — that's the pendulum energy.
+      // Eliminate outward velocity along the rope when taut (preserves tangential swing velocity)
       const radialVel = worm.vx * ox + worm.vy * oy; // > 0 outward, < 0 inward
-      if (dist >= this.length && radialVel > 0) {
-        // Only cancel the outward component, preserve tangential velocity
+      if (dist >= this.length - 1.0 && radialVel > 0) {
         worm.vx -= ox * radialVel;
         worm.vy -= oy * radialVel;
       }
     }
   }
 
+  /**
+   * Draws the Arcane Tether (Lien Magique) connecting the wizard's staff to the anchor rune.
+   */
   public draw(ctx: CanvasRenderingContext2D, wormX: number, wormY: number) {
     if (this.state === 'idle') return;
 
     ctx.save();
-    // Rope cable
-    ctx.strokeStyle = '#cccccc';
-    ctx.lineWidth = 1.3;
+
+    // 1. Arcane Beam Glow
+    const pulse = 0.5 + 0.5 * Math.sin(this.animTimer * 0.15);
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = this.state === 'attached' ? '#55ddff' : '#aa77ff';
+
+    // Outer magical beam
+    ctx.strokeStyle = this.state === 'attached' ? `rgba(60, 200, 255, ${0.7 + pulse * 0.3})` : `rgba(180, 100, 255, ${0.8})`;
+    ctx.lineWidth = 2.2;
     ctx.beginPath();
     ctx.moveTo(wormX, wormY);
     ctx.lineTo(this.hookX, this.hookY);
     ctx.stroke();
 
-    // Hook tip
-    ctx.fillStyle = this.state === 'attached' ? '#ff3333' : '#ffffff';
-    ctx.fillRect(this.hookX - 2, this.hookY - 2, 4, 4);
+    // Inner bright energy core
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.0;
+    ctx.stroke();
+
+    // 2. Anchor Point (Arcane Rune Crystal)
+    if (this.state === 'attached') {
+      const runeSize = 3.5 + pulse * 1.5;
+      ctx.fillStyle = '#ffdd44';
+      ctx.shadowColor = '#ffaa00';
+      ctx.shadowBlur = 10;
+
+      // Draw diamond / 4-pointed magic star
+      ctx.beginPath();
+      ctx.moveTo(this.hookX, this.hookY - runeSize);
+      ctx.lineTo(this.hookX + runeSize * 0.7, this.hookY);
+      ctx.lineTo(this.hookX, this.hookY + runeSize);
+      ctx.lineTo(this.hookX - runeSize * 0.7, this.hookY);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(this.hookX, this.hookY, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // Flying magical projectile tip
+      ctx.fillStyle = '#cc88ff';
+      ctx.beginPath();
+      ctx.arc(this.hookX, this.hookY, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     ctx.restore();
   }
 }

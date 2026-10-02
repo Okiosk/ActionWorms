@@ -1,8 +1,9 @@
 /**
- * ShopUI — Écran de boutique d'armes affiché entre la mort et le respawn.
+ * ShopUI — Écran de Grimoire Magique & Sanctuaire des Sorts.
  *
- * Le joueur peut prendre autant de temps qu'il veut pour choisir son arme.
- * Pas de countdown. Le respawn se déclenche uniquement au clic sur "Spawn !".
+ * Affiché avant le premier spawn et entre chaque réincarnation.
+ * Le joueur peut prendre tout son temps pour choisir son sort.
+ * Le respawn se déclenche uniquement en confirmant l'incantation.
  */
 
 import { WEAPON_REGISTRY, ALL_WEAPON_IDS, MONEY_KILL, MONEY_DEATH } from '../weapons/WeaponRegistry';
@@ -25,7 +26,7 @@ export class ShopUI {
     container.appendChild(this.el);
   }
 
-  /** Affiche la boutique pour le ver donné. Pas de countdown — le joueur choisit quand il veut. */
+  /** Affiche le Grimoire pour le sorcier. Pas de compte à rebours. */
   public show(worm: Worm, onBuy: OnBuyCallback) {
     this.worm = worm;
     this.onBuy = onBuy;
@@ -35,7 +36,7 @@ export class ShopUI {
     this.render();
   }
 
-  /** Cache la boutique. */
+  /** Cache le Grimoire. */
   public hide() {
     this.visible = false;
     this.el.style.display = 'none';
@@ -44,9 +45,8 @@ export class ShopUI {
 
   public isVisible() { return this.visible; }
 
-  /** tick() est toujours appelé depuis main.ts mais ne fait rien (pas de countdown). */
   public tick() {
-    // Intentionally empty — no auto-respawn timer
+    // Pas de compte à rebours automatique
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -62,17 +62,21 @@ export class ShopUI {
       const canAfford = w.money >= def.price;
       const isFree = def.price === 0;
       const isSelected = id === this.selectedId;
+      const elemColor = def.elementColor || '#ffd700';
 
       return `
         <div class="shop-row${isSelected ? ' selected' : ''}${canAfford ? '' : ' cant-afford'}"
-             data-id="${id}">
+             data-id="${id}" style="${isSelected ? `border-color: ${elemColor}; box-shadow: 0 0 10px ${elemColor}44;` : ''}">
           <span class="shop-icon">${def.icon}</span>
           <div class="shop-info">
-            <span class="shop-name">${def.name}</span>
+            <div class="shop-name-row">
+              <span class="shop-name">${def.name}</span>
+              ${def.spellSchool ? `<span class="spell-school-tag" style="color: ${elemColor}; border-color: ${elemColor}66;">${def.spellSchool}</span>` : ''}
+            </div>
             <span class="shop-desc">${def.description}</span>
           </div>
           <span class="shop-price ${isFree ? 'free' : canAfford ? 'ok' : 'expensive'}">
-            ${isFree ? '🆓 GRATUIT' : `💰 ${def.price}`}
+            ${isFree ? '✨ INNÉ' : `✨ ${def.price}`}
           </span>
         </div>`;
     }).join('');
@@ -80,16 +84,16 @@ export class ShopUI {
     this.el.innerHTML = `
       <div class="shop-panel">
         <div class="shop-header">
-          <div class="shop-title">⚔️ ARMURERIE</div>
-          <div class="shop-balance">💰 Solde : <b>${w.money}</b></div>
-          <div class="shop-hint">Kill +${MONEY_KILL} · Mort +${MONEY_DEATH}</div>
+          <div class="shop-title">🧙‍♂️ GRIMOIRE ARCANIQUE — SANCTUAIRE DES SORTS</div>
+          <div class="shop-balance">✨ Réserve de Mana : <b>${w.money}</b></div>
+          <div class="shop-hint">Sorcier terrassé +${MONEY_KILL} ✨ · Réincarnation +${MONEY_DEATH} ✨</div>
         </div>
         <div class="shop-list" id="shop-list">${rows}</div>
         <div class="shop-footer">
           <button class="shop-btn" id="shop-confirm" ${this.selectedId ? '' : 'disabled'}>
             ${this.selectedId
-              ? `${WEAPON_REGISTRY[this.selectedId].icon} ${WEAPON_REGISTRY[this.selectedId].name} → Spawn !`
-              : 'Sélectionnez une arme'}
+              ? `${WEAPON_REGISTRY[this.selectedId].icon} Invoquer "${WEAPON_REGISTRY[this.selectedId].name}" → Entrer dans l'Arène !`
+              : 'Sélectionnez un sort à imprégner dans votre bâton'}
           </button>
         </div>
       </div>`;
@@ -115,10 +119,10 @@ export class ShopUI {
   private _confirmPurchase(id: WeaponId) {
     if (!this.worm || !this.onBuy) return;
     const def = WEAPON_REGISTRY[id];
-    // Déduire le coût
+    // Déduire le mana
     if (def.price > 0) {
       if (this.worm.money < def.price) {
-        // Fallback bazooka gratuit
+        // Fallback sort gratuit (bazooka = Boule de Feu)
         this.onBuy('bazooka');
         this.hide();
         return;

@@ -48,4 +48,7 @@ export interface WeaponDef {
   acidPool?: boolean;      // leaves an acid pool on detonation
   freezeDuration?: number; // frames to freeze nearby worms
   laser?: boolean;         // hitscan instant beam (no projectile movement)
+  // Fantasy / Magic Theme
+  elementColor?: string;   // couleur du cristal magique sur le bâton
+  spellSchool?: string;    // école de magie (ex: Pyromancie, Arcanes, etc.)
 }

@@ -82,7 +82,7 @@ export class ParticleManager {
     }
   }
 
-  public spawnExplosionFX(x: number, y: number, radius: number = 20) {
+  public spawnExplosionFX(x: number, y: number, radius: number = 20, color?: string) {
     const sparkCount = Math.floor(radius * 1.2);
     const smokeCount = Math.floor(radius * 0.8);
     const dirtCount = Math.floor(radius * 1.0);
@@ -97,7 +97,7 @@ export class ParticleManager {
         Math.cos(angle) * speed,
         Math.sin(angle) * speed,
         'spark',
-        undefined,
+        color || undefined,
         1.5 + Math.random() * 2,
         20 + Math.floor(Math.random() * 30)
       );

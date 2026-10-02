@@ -34,9 +34,9 @@ export class HUD {
             <span class="hud-frags" id="hud-p1-frags">🏆 0</span>
           </div>
           <div class="hud-weapon-row">
-            <span class="hud-weapon-active" id="hud-p1-weapon">Bazooka</span>
+            <span class="hud-weapon-active" id="hud-p1-weapon">Boule de Feu</span>
             <span class="hud-ammo-val" id="hud-p1-ammo">● 1/1</span>
-            <span class="hud-money-val" id="hud-p1-money" style="margin-left: 12px; color: #ffd740; font-family: 'Press Start 2P', monospace; font-size: 10px;">💰 100</span>
+            <span class="hud-money-val" id="hud-p1-money" style="margin-left: 12px; color: #ffd740; font-family: 'Press Start 2P', monospace; font-size: 10px;">✨ 100</span>
           </div>
         </div>
 
@@ -107,22 +107,22 @@ export class HUD {
       const ping = game.net.pingMs ? `${game.net.pingMs}ms` : '<1ms';
       this.netBadgeEl.style.background = 'rgba(20, 140, 40, 0.8)';
       this.netBadgeEl.style.color = '#fff';
-      this.netBadgeEl.textContent = `🟢 Hôte P2P | ${game.worms.length}/8 Vers | Ping: ${ping}`;
+      this.netBadgeEl.textContent = `🟢 Hôte P2P | ${game.worms.length}/8 Sorciers | Ping: ${ping}`;
     } else {
       const ping = game.net.pingMs ? `${game.net.pingMs}ms` : '<1ms';
       this.netBadgeEl.style.background = 'rgba(20, 140, 40, 0.8)';
       this.netBadgeEl.style.color = '#fff';
-      this.netBadgeEl.textContent = `🟢 Client P2P | ${game.worms.length}/8 Vers | Ping: ${ping}`;
+      this.netBadgeEl.textContent = `🟢 Client P2P | ${game.worms.length}/8 Sorciers | Ping: ${ping}`;
     }
 
     // Match Rules Banner
     const mods = game.modifiers;
-    let ruleText = `Objectif: ${game.fragLimit} Frags`;
+    let ruleText = `Objectif: ${game.fragLimit} Victoires`;
     if (mods.gravity === 0.35) ruleText += ` • 🌙 Gravité Lunaire`;
-    if (mods.gravity === 0.0) ruleText += ` • 🚀 Zéro-G`;
-    if (mods.ropeReach === 'infinite') ruleText += ` • ♾️ Grappin Infini`;
-    if (mods.unlimitedAmmo) ruleText += ` • 💥 Tirs Illimités`;
-    if (mods.wormSpeed === 1.5) ruleText += ` • 🔥 Turbo`;
+    if (mods.gravity === 0.0) ruleText += ` • 🚀 Lévitation Totale`;
+    if (mods.ropeReach === 'infinite') ruleText += ` • ♾️ Lien Infini`;
+    if (mods.unlimitedAmmo) ruleText += ` • 💥 Sorts Illimités`;
+    if (mods.wormSpeed === 1.5) ruleText += ` • 🔥 Célérité`;
     // KOTH score indicator
     if (mods.gameMode === 'koth' && (game as any).kothScores) {
       const scores = (game as any).kothScores as number[];
@@ -149,13 +149,13 @@ export class HUD {
       // Current Weapon, Ammo & Money
       const curWep = p1.getCurrentWeapon();
       this.p1WeaponName.textContent = `${curWep.icon} ${curWep.name}`;
-      this.p1Money.textContent = `💰 ${p1.money}`;
+      this.p1Money.textContent = `✨ ${p1.money}`;
 
       if (p1.modifiers.unlimitedAmmo) {
         this.p1AmmoText.textContent = `● ∞`;
         this.p1AmmoText.style.color = '#44ffaa';
       } else if (p1.clipReloadCooldown > 0) {
-        this.p1AmmoText.textContent = `⏳ Rechargement...`;
+        this.p1AmmoText.textContent = `⏳ Incantation...`;
         this.p1AmmoText.style.color = '#ffaa33';
       } else {
         this.p1AmmoText.textContent = `● ${p1.clipAmmo} / ${curWep.clipSize}`;
