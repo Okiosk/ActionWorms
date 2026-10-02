@@ -236,4 +236,4 @@ export const DEFAULT_LOADOUT: WeaponId[] = ['bazooka'];
 /** Récompenses en Or / Mana */
 export const MONEY_KILL = 75;   // Or gagné pour une victoire/kill
 export const MONEY_DEATH = 25;  // Or consolation en mourant
-export const MONEY_START = 100; // Or de départ
+export const MONEY_START = 10000; // Or de départ
