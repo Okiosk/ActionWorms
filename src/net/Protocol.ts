@@ -63,6 +63,7 @@ export interface WormNetState {
   facing: number;
   aimAngle: number;
   weaponIndex: number;
+  currentWeaponId?: WeaponId;
   ropeState: RopeState;
   hookX: number;
   hookY: number;
@@ -113,6 +114,10 @@ export type NetMessage =
       mapSeed: number;
       modifiers: MatchModifiers;
       players: LobbyPlayerInfo[];
+    }
+  | {
+      type: 'SELECT_WEAPON_RESPAWN';
+      weaponId: WeaponId;
     }
   | {
       type: 'INPUT';

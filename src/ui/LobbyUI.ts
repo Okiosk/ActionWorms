@@ -101,12 +101,11 @@ export class LobbyUI {
 
         <div class="loadout-preview">
           <div class="loadout-header">
-            <span>Arsenal actif (5 / 19 armes)</span>
-            <button class="btn-text" id="btn-edit-loadout">Modifier l'arsenal ⚙️</button>
+            <span>🛒 Armurerie & Boutique en Jeu</span>
           </div>
-          <div class="loadout-icons" id="loadout-icons-preview">
-            ${this.renderLoadoutIcons()}
-          </div>
+          <p style="font-size: 15px; color: var(--text-muted); margin-top: 6px; line-height: 1.3;">
+            Sélectionnez votre arme dans la boutique avant chaque apparition ! Gagnez des pièces (💰) à chaque frag (+75) et à chaque mort (+25) pour débloquer des armes dévastatrices.
+          </p>
         </div>
 
         <div class="footer-tip">

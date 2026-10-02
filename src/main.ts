@@ -47,36 +47,15 @@ window.addEventListener('DOMContentLoaded', () => {
     if (e.button === 2) isMouseDownRight = false;
   });
 
-  // Mouse wheel weapon switching
-  window.addEventListener('wheel', (e) => {
-    if (game.worms.length > 0 && game.isRunning) {
-      const localWorm = game.getLocalWorm();
-      if (localWorm && localWorm.isAlive()) {
-        const nextIdx = e.deltaY > 0
-          ? (localWorm.currentWeaponIndex + 1) % localWorm.weapons.length
-          : (localWorm.currentWeaponIndex - 1 + localWorm.weapons.length) % localWorm.weapons.length;
-        localWorm.selectWeapon(nextIdx);
-        game.localP1Input.weaponSlot = nextIdx;
-      }
-    }
-  });
-
   // Keyboard state tracking (supports AZERTY and QWERTY)
   const keys: Record<string, boolean> = {};
 
   window.addEventListener('keydown', (e) => {
     keys[e.code] = true;
-    if (['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5'].includes(e.code)) {
-      const slot = parseInt(e.code.replace('Digit', '')) - 1;
-      game.localP1Input.weaponSlot = slot;
-    }
   });
 
   window.addEventListener('keyup', (e) => {
     keys[e.code] = false;
-    if (['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5'].includes(e.code)) {
-      game.localP1Input.weaponSlot = undefined;
-    }
   });
 
   function processLocalInputs() {
@@ -100,7 +79,6 @@ window.addEventListener('DOMContentLoaded', () => {
       jump: !!(keys['KeyW'] || keys['KeyZ'] || keys['Space'] || keys['ArrowUp']),
       fire: isMouseDownLeft || !!keys['KeyF'] || !!keys['Enter'],
       rope: isMouseDownRight || !!keys['KeyE'] || !!keys['ShiftLeft'] || !!keys['ShiftRight'],
-      weaponSlot: game.localP1Input.weaponSlot,
       aimAngle: p1AimAngle
     };
   }
@@ -183,12 +161,10 @@ window.addEventListener('DOMContentLoaded', () => {
     lobby.showGameOverModal(winner.name, isP1Winner);
   };
 
-  // 🛒 Shop: open when local worm dies, apply weapon on purchase
-  game.onLocalWormDied = (worm, _respawnFrames) => {
+  // 🛒 Shop: open when local worm dies or before first spawn, spawn immediately upon weapon confirmation!
+  game.onLocalWormDied = (worm) => {
     shop.show(worm, (weaponId: WeaponId) => {
-      // Apply chosen weapon loadout then start the respawn timer
-      worm.setLoadout([weaponId]);
-      worm.respawnTimer = 3 * 60; // 3 seconds to respawn after shop
+      game.selectWeaponAndRespawn(worm.id, weaponId);
     });
   };
 
@@ -206,9 +182,19 @@ window.addEventListener('DOMContentLoaded', () => {
     if (game.isRunning) {
       if (!shop.isVisible()) {
         processLocalInputs();
+      } else {
+        game.localP1Input = {
+          left: false,
+          right: false,
+          up: false,
+          down: false,
+          jump: false,
+          fire: false,
+          rope: false
+        };
       }
       game.update();
-      shop.tick(); // countdown + auto-respawn if timer hits 0
+      shop.tick();
     }
   });
   ticker.start();

@@ -47,7 +47,8 @@ export class Worm {
   public isDigging: boolean = false;
   public respawnTimer: number = 0;
   public freezeTimer: number = 0;     // frames remaining frozen
-  public pendingShopOpen: boolean = false; // flag for UI to open shop on next frame
+  /** true = le joueur est en train de choisir son arme dans la boutique, NE PAS respawner */
+  public waitingForShop: boolean = false;
   private regenAccum: number = 0;     // fractional HP accumulator for regen
 
   // Rope
@@ -74,7 +75,8 @@ export class Worm {
   }
 
   public setLoadout(loadout: WeaponId[]) {
-    this.weapons = loadout.map(id => WEAPON_REGISTRY[id]);
+    const id = loadout[0] || 'bazooka';
+    this.weapons = [WEAPON_REGISTRY[id] || WEAPON_REGISTRY.bazooka];
     this.currentWeaponIndex = 0;
     this.resetAmmo();
   }
@@ -83,11 +85,8 @@ export class Worm {
   public addWeapon(id: WeaponId) {
     const def = WEAPON_REGISTRY[id];
     if (!def) return;
-    // Éviter les doublons
-    const idx = this.weapons.findIndex(w => w.id === id);
-    if (idx >= 0) return; // already have it
-    this.weapons.push(def);
-    this.currentWeaponIndex = this.weapons.length - 1;
+    this.weapons = [def];
+    this.currentWeaponIndex = 0;
     this.resetAmmo();
   }
 
@@ -130,22 +129,19 @@ export class Worm {
   }
 
   public getCurrentWeapon(): WeaponDef {
-    return this.weapons[this.currentWeaponIndex] || this.weapons[0];
+    return this.weapons[0] || WEAPON_REGISTRY.bazooka;
   }
 
-  public selectWeapon(index: number) {
-    if (index >= 0 && index < this.weapons.length && index !== this.currentWeaponIndex) {
-      this.currentWeaponIndex = index;
-      this.resetAmmo();
-    }
+  public selectWeapon(_index: number) {
+    // Single weapon mode — no switching
   }
 
   public nextWeapon() {
-    this.selectWeapon((this.currentWeaponIndex + 1) % this.weapons.length);
+    // Single weapon mode — no switching
   }
 
   public prevWeapon() {
-    this.selectWeapon((this.currentWeaponIndex - 1 + this.weapons.length) % this.weapons.length);
+    // Single weapon mode — no switching
   }
 
   public spawn(x: number, y: number) {
@@ -155,6 +151,7 @@ export class Worm {
     this.vy = 0;
     this.health = this.maxHealth;
     this.respawnTimer = 0;
+    this.waitingForShop = false;
     this.rope.release();
     this.resetAmmo();
   }
@@ -179,8 +176,7 @@ export class Worm {
     }
 
     if (this.health <= 0) {
-      this.deaths++;
-      this.respawnTimer = CONFIG.RESPAWN_DELAY_FRAMES;
+      // respawnTimer and waitingForShop are set by Game.ts depending on local/remote
       this.rope.release();
       sound.playDie();
     }
@@ -232,15 +228,6 @@ export class Worm {
       }
     }
     if (this.digSoundCooldown > 0) this.digSoundCooldown--;
-
-    // Weapon slot input
-    if (input.weaponSlot !== undefined) {
-      this.selectWeapon(input.weaponSlot);
-    } else if (input.nextWeapon) {
-      this.nextWeapon();
-    } else if (input.prevWeapon) {
-      this.prevWeapon();
-    }
 
     // Aiming angle
     if (input.aimAngle !== undefined) {

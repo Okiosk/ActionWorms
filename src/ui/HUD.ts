@@ -8,7 +8,7 @@ export class HUD {
   private p1HpText: HTMLElement;
   private p1AmmoText: HTMLElement;
   private p1WeaponName: HTMLElement;
-  private p1WeaponSlots: HTMLElement;
+  private p1Money: HTMLElement;
   private p1Frags: HTMLElement;
   private p1ColorDot: HTMLElement;
 
@@ -36,8 +36,8 @@ export class HUD {
           <div class="hud-weapon-row">
             <span class="hud-weapon-active" id="hud-p1-weapon">Bazooka</span>
             <span class="hud-ammo-val" id="hud-p1-ammo">● 1/1</span>
+            <span class="hud-money-val" id="hud-p1-money" style="margin-left: 12px; color: #ffd740; font-family: 'Press Start 2P', monospace; font-size: 10px;">💰 100</span>
           </div>
-          <div class="hud-slots" id="hud-p1-slots"></div>
         </div>
 
         <!-- Center: Kill Feed, Net Badge & Rule Banner -->
@@ -67,7 +67,7 @@ export class HUD {
     this.p1HpText = this.container.querySelector('#hud-p1-hp-text')!;
     this.p1AmmoText = this.container.querySelector('#hud-p1-ammo')!;
     this.p1WeaponName = this.container.querySelector('#hud-p1-weapon')!;
-    this.p1WeaponSlots = this.container.querySelector('#hud-p1-slots')!;
+    this.p1Money = this.container.querySelector('#hud-p1-money')!;
     this.p1Frags = this.container.querySelector('#hud-p1-frags')!;
 
     this.scoreboardEl = this.container.querySelector('#hud-scoreboard')!;
@@ -146,9 +146,10 @@ export class HUD {
       this.p1HpText.textContent = `${Math.ceil(p1.health)}`;
       this.p1Frags.textContent = `🏆 ${p1.frags}`;
 
-      // Current Weapon & Ammo
+      // Current Weapon, Ammo & Money
       const curWep = p1.getCurrentWeapon();
       this.p1WeaponName.textContent = `${curWep.icon} ${curWep.name}`;
+      this.p1Money.textContent = `💰 ${p1.money}`;
 
       if (p1.modifiers.unlimitedAmmo) {
         this.p1AmmoText.textContent = `● ∞`;
@@ -159,21 +160,6 @@ export class HUD {
       } else {
         this.p1AmmoText.textContent = `● ${p1.clipAmmo} / ${curWep.clipSize}`;
         this.p1AmmoText.style.color = '#ffffff';
-      }
-
-      // Weapon Slots
-      let slotsHtml = '';
-      p1.weapons.forEach((w, idx) => {
-        const isSelected = idx === p1.currentWeaponIndex;
-        slotsHtml += `
-          <div class="hud-slot ${isSelected ? 'active' : ''}" data-idx="${idx}">
-            <span class="slot-num">${idx + 1}</span>
-            <span class="slot-icon">${w.icon}</span>
-          </div>
-        `;
-      });
-      if (this.p1WeaponSlots.innerHTML !== slotsHtml) {
-        this.p1WeaponSlots.innerHTML = slotsHtml;
       }
     }
 

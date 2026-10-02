@@ -307,6 +307,14 @@ export class Game {
           this.broadcastLobbyUpdate();
         } else if (msg.type === 'SET_MODIFIERS') {
           this.setModifiers(msg.modifiers);
+        } else if (msg.type === 'SELECT_WEAPON_RESPAWN') {
+          const w = this.worms.find(worm => worm.id === fromId);
+          if (w) {
+            w.setLoadout([msg.weaponId]);
+            w.waitingForShop = false;
+            const spawn = this.terrain.findSpawnPoint();
+            w.spawn(spawn.x, spawn.y);
+          }
         }
       } else if (this.mode === 'online_client') {
         if (msg.type === 'WELCOME') {
@@ -334,15 +342,21 @@ export class Game {
           this.worms = [];
 
           for (const p of msg.players) {
-            const w = new Worm(p.id, p.name, p.color, false, p.loadout);
+            const w = new Worm(p.id, p.name, p.color, false, ['bazooka']);
             w.applyModifiers(this.modifiers);
-            const spawn = this.terrain.findSpawnPoint();
-            w.spawn(spawn.x, spawn.y);
+            w.health = 0; // Not spawned yet! Waiting for shop
+            w.waitingForShop = true;
             this.worms.push(w);
           }
 
           this.isRunning = true;
           this.onStartMatchReceived?.(msg.modifiers);
+
+          // Trigger shop for local client worm
+          const localWorm = this.getLocalWorm();
+          if (localWorm) {
+            this.onLocalWormDied?.(localWorm, 0);
+          }
         } else if (msg.type === 'STATE') {
           this.applyWorldState(msg);
         } else if (msg.type === 'MATCH_OVER') {
@@ -431,10 +445,10 @@ export class Game {
 
     const players = this.getLobbyPlayers();
     for (const p of players) {
-      const w = new Worm(p.id, p.name, p.color, false, p.loadout);
+      const w = new Worm(p.id, p.name, p.color, false, ['bazooka']);
       w.applyModifiers(this.modifiers);
-      const spawn = this.terrain.findSpawnPoint();
-      w.spawn(spawn.x, spawn.y);
+      w.health = 0; // Not spawned yet! Waiting for shop
+      w.waitingForShop = true;
       this.worms.push(w);
     }
 
@@ -445,6 +459,37 @@ export class Game {
       modifiers: this.modifiers,
       players
     });
+
+    // Trigger shop for host local worm
+    const localWorm = this.getLocalWorm();
+    if (localWorm) {
+      this.onLocalWormDied?.(localWorm, 0);
+    }
+  }
+
+  /**
+   * Spawns a worm after purchasing/choosing an weapon in the shop.
+   */
+  public selectWeaponAndRespawn(wormId: string, weaponId: WeaponId) {
+    if (this.mode === 'online_host') {
+      const w = this.worms.find(worm => worm.id === wormId);
+      if (w) {
+        w.setLoadout([weaponId]);
+        w.waitingForShop = false;
+        const spawn = this.terrain.findSpawnPoint();
+        w.spawn(spawn.x, spawn.y);
+      }
+    } else {
+      const localWorm = this.getLocalWorm();
+      if (localWorm) {
+        localWorm.setLoadout([weaponId]);
+        localWorm.waitingForShop = false;
+      }
+      this.net.broadcast({
+        type: 'SELECT_WEAPON_RESPAWN',
+        weaponId
+      });
+    }
   }
 
   public addNetworkPlayer(peerId: string, name: string, loadout: WeaponId[]) {
@@ -583,7 +628,7 @@ export class Game {
       worm.update(input, this.terrain, this.particles, (w, wep, ang) => this.spawnProjectiles(w, wep, ang));
 
       // Handle Respawn for all worms
-      if (!worm.isAlive() && worm.respawnTimer === 0) {
+      if (!worm.isAlive() && !worm.waitingForShop && worm.respawnTimer === 0) {
         const spawn = this.terrain.findSpawnPoint();
         worm.spawn(spawn.x, spawn.y);
       }
@@ -608,8 +653,7 @@ export class Game {
           // Green acid particles
           this.particles.spawn(worm.x + (Math.random() - 0.5) * 8, worm.y + 4, (Math.random() - 0.5) * 0.5, -0.8, 'spark', '#44ff44', 1.5, 15);
           if (!worm.isAlive()) {
-            this.particles.spawnGibs(worm.x, worm.y);
-            this.onKillFeed?.(worm.name, 'Dissous par l\'acide');
+            this.onWormKilled(worm, 'acid');
           }
         }
       }
@@ -644,51 +688,7 @@ export class Game {
             }
             // Check if killed
             if (!w.isAlive()) {
-              this.particles.spawnGibs(w.x, w.y);
-              const killer = this.worms.find(k => k.id === attId);
-              if (killer && killer.id !== w.id) {
-                // 💰 Kill reward
-                killer.money += MONEY_KILL;
-                w.deaths++;
-                w.money += MONEY_DEATH; // consolation prize
-                if (mods.gameMode === 'ffa') {
-                  killer.frags++;
-                  this.onKillFeed?.(killer.name, w.name);
-                  if (killer.frags >= this.fragLimit && !this.matchWinner) {
-                    this.matchWinner = killer;
-                    this.onMatchEnd?.(killer);
-                    this.net.broadcast({ type: 'MATCH_OVER', winnerId: killer.id });
-                  }
-                } else if (mods.gameMode === 'teams') {
-                  killer.frags++;
-                  const killerTeam = mods.teams[killer.id] ?? 0;
-                  this.kothScores[killerTeam] = (this.kothScores[killerTeam] || 0) + 1;
-                  this.onKillFeed?.(killer.name, w.name);
-                  if (this.kothScores[killerTeam] >= this.fragLimit && !this.matchWinner) {
-                    this.matchWinner = killer;
-                    this.onMatchEnd?.(killer);
-                    this.net.broadcast({ type: 'MATCH_OVER', winnerId: killer.id });
-                  }
-                } else {
-                  // KOTH: kills still count toward kills but win by zone
-                  killer.frags++;
-                  this.onKillFeed?.(killer.name, w.name);
-                }
-              } else {
-                // Suicide: small consolation
-                w.deaths++;
-                w.money += MONEY_DEATH;
-                this.onKillFeed?.(w.name, 'S\'est suicidé');
-              }
-              // 🛒 Trigger shop for LOCAL worm if it's the one that just died
-              if (w.id === this.getLocalWorm()?.id) {
-                const RESPAWN_FRAMES = 5 * 60; // passed to callback for info only
-                w.respawnTimer = 0; // frozen until shop confirms
-                this.onLocalWormDied?.(w, RESPAWN_FRAMES);
-              } else {
-                // Remote worms just respawn after a delay
-                w.respawnTimer = 5 * 60;
-              }
+              this.onWormKilled(w, attId);
             }
           },
           isAlive: () => w.isAlive()
@@ -755,6 +755,58 @@ export class Game {
     }
   }
 
+  public onWormKilled(victim: Worm, attackerId?: string) {
+    if (victim.waitingForShop) return; // already dead & waiting for shop
+    victim.health = 0;
+    victim.waitingForShop = true;
+    victim.respawnTimer = 0;
+    victim.deaths++;
+    victim.money += MONEY_DEATH;
+    victim.rope.release();
+    this.particles.spawnGibs(victim.x, victim.y);
+    sound.playDie();
+
+    const killer = attackerId ? this.worms.find(k => k.id === attackerId) : undefined;
+    if (killer && killer.id !== victim.id) {
+      // 💰 Kill reward
+      killer.money += MONEY_KILL;
+      if (this.modifiers.gameMode === 'ffa') {
+        killer.frags++;
+        this.onKillFeed?.(killer.name, victim.name);
+        if (killer.frags >= this.fragLimit && !this.matchWinner) {
+          this.matchWinner = killer;
+          this.onMatchEnd?.(killer);
+          this.net.broadcast({ type: 'MATCH_OVER', winnerId: killer.id });
+        }
+      } else if (this.modifiers.gameMode === 'teams') {
+        killer.frags++;
+        const killerTeam = this.modifiers.teams[killer.id] ?? 0;
+        this.kothScores[killerTeam] = (this.kothScores[killerTeam] || 0) + 1;
+        this.onKillFeed?.(killer.name, victim.name);
+        if (this.kothScores[killerTeam] >= this.fragLimit && !this.matchWinner) {
+          this.matchWinner = killer;
+          this.onMatchEnd?.(killer);
+          this.net.broadcast({ type: 'MATCH_OVER', winnerId: killer.id });
+        }
+      } else {
+        // KOTH: kills still count toward kills but win by zone
+        killer.frags++;
+        this.onKillFeed?.(killer.name, victim.name);
+      }
+    } else {
+      if (attackerId === 'acid') {
+        this.onKillFeed?.(victim.name, 'Dissous par l\'acide');
+      } else {
+        this.onKillFeed?.(victim.name, 'S\'est suicidé');
+      }
+    }
+
+    // 🛒 Trigger shop for LOCAL worm if it's the one that died
+    if (victim.id === this.net.myPeerId) {
+      this.onLocalWormDied?.(victim, 0);
+    }
+  }
+
   private broadcastHostState() {
     const wormStates: WormNetState[] = this.worms.map(w => ({
       id: w.id,
@@ -770,6 +822,7 @@ export class Game {
       facing: w.facing,
       aimAngle: Math.round(w.aimAngle * 100) / 100,
       weaponIndex: w.currentWeaponIndex,
+      currentWeaponId: w.getCurrentWeapon().id,
       ropeState: w.rope.state,
       hookX: Math.round(w.rope.hookX),
       hookY: Math.round(w.rope.hookY)
@@ -821,7 +874,7 @@ export class Game {
     for (const ws of msg.worms) {
       let worm = this.worms.find(w => w.id === ws.id);
       if (!worm) {
-        worm = new Worm(ws.id, ws.name, ws.color, false, DEFAULT_LOADOUT);
+        worm = new Worm(ws.id, ws.name, ws.color, false, ws.currentWeaponId ? [ws.currentWeaponId] : DEFAULT_LOADOUT);
         worm.applyModifiers(this.modifiers);
         this.worms.push(worm);
       }
@@ -829,12 +882,17 @@ export class Game {
       worm.name = ws.name;
       worm.color = ws.color;
 
+      if (ws.currentWeaponId && worm.getCurrentWeapon()?.id !== ws.currentWeaponId) {
+        worm.setLoadout([ws.currentWeaponId]);
+      }
+
       if (ws.health <= 0 && worm.health > 0) {
         sound.playDie();
         this.particles.spawnGibs(worm.x, worm.y);
       }
 
       if (worm.id === this.net.myPeerId) {
+        const wasAlive = worm.health > 0;
         // Authoritative stats from host
         worm.health = ws.health;
         worm.frags = ws.frags;
@@ -846,8 +904,13 @@ export class Game {
           worm.vx = ws.vx;
           worm.vy = ws.vy;
           worm.rope.release();
+          if (wasAlive && !worm.waitingForShop) {
+            worm.waitingForShop = true;
+            this.onLocalWormDied?.(worm, 0);
+          }
         } else {
           // Position reconciliation with host
+          worm.waitingForShop = false;
           const dx = ws.x - worm.x;
           const dy = ws.y - worm.y;
           const distSq = dx * dx + dy * dy;

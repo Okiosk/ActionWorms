@@ -219,8 +219,8 @@ export const ALL_WEAPON_IDS: WeaponId[] = [
 /** Armes gratuites disponibles dès le départ */
 export const FREE_WEAPONS: WeaponId[] = ['bazooka', 'minigun', 'shotgun'];
 
-/** Starter loadout (3 armes gratuites par défaut) */
-export const DEFAULT_LOADOUT: WeaponId[] = ['bazooka', 'minigun', 'shotgun'];
+/** Starter loadout (1 arme par défaut) */
+export const DEFAULT_LOADOUT: WeaponId[] = ['bazooka'];
 
 /** Récompenses en pièces */
 export const MONEY_KILL = 75;   // argent gagné pour un kill
