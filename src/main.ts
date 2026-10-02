@@ -184,11 +184,11 @@ window.addEventListener('DOMContentLoaded', () => {
   };
 
   // 🛒 Shop: open when local worm dies, apply weapon on purchase
-  game.onLocalWormDied = (worm, respawnFrames) => {
-    shop.show(worm, respawnFrames, (weaponId: WeaponId) => {
-      // Apply chosen weapon loadout before the worm respawns
+  game.onLocalWormDied = (worm, _respawnFrames) => {
+    shop.show(worm, (weaponId: WeaponId) => {
+      // Apply chosen weapon loadout then start the respawn timer
       worm.setLoadout([weaponId]);
-      // Let the game know the respawn can proceed (timer is already counting down)
+      worm.respawnTimer = 3 * 60; // 3 seconds to respawn after shop
     });
   };
 

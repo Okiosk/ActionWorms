@@ -1,13 +1,8 @@
 /**
  * ShopUI — Écran de boutique d'armes affiché entre la mort et le respawn.
  *
- * Fonctionnement :
- *  - S'affiche quand le ver local meurt (respawnTimer démarre dans Game).
- *  - Montre le solde actuel, un countdown de respawn, et la liste de toutes
- *    les armes avec leur prix.
- *  - Le joueur sélectionne une arme et clique "Acheter & Respawn".
- *  - L'arme est appliquée immédiatement ; si le joueur n'a pas assez d'argent
- *    il doit choisir une arme gratuite.
+ * Le joueur peut prendre autant de temps qu'il veut pour choisir son arme.
+ * Pas de countdown. Le respawn se déclenche uniquement au clic sur "Spawn !".
  */
 
 import { WEAPON_REGISTRY, ALL_WEAPON_IDS, MONEY_KILL, MONEY_DEATH } from '../weapons/WeaponRegistry';
@@ -19,10 +14,8 @@ type OnBuyCallback = (weaponId: WeaponId) => void;
 export class ShopUI {
   private el: HTMLElement;
   private worm: Worm | null = null;
-  private countdown: number = 0;
   private selectedId: WeaponId | null = null;
   private onBuy: OnBuyCallback | null = null;
-  private animFrame: number = 0;
   private visible: boolean = false;
 
   constructor(container: HTMLElement) {
@@ -32,10 +25,9 @@ export class ShopUI {
     container.appendChild(this.el);
   }
 
-  /** Affiche la boutique pour le ver donné, avec un timer de respawn en frames. */
-  public show(worm: Worm, respawnFrames: number, onBuy: OnBuyCallback) {
+  /** Affiche la boutique pour le ver donné. Pas de countdown — le joueur choisit quand il veut. */
+  public show(worm: Worm, onBuy: OnBuyCallback) {
     this.worm = worm;
-    this.countdown = respawnFrames;
     this.onBuy = onBuy;
     this.selectedId = null;
     this.visible = true;
@@ -52,15 +44,9 @@ export class ShopUI {
 
   public isVisible() { return this.visible; }
 
-  /** Appelé chaque frame par Game.ts pour mettre à jour le countdown. */
+  /** tick() est toujours appelé depuis main.ts mais ne fait rien (pas de countdown). */
   public tick() {
-    if (!this.visible || !this.worm) return;
-    this.countdown = Math.max(0, this.countdown - 1);
-    this.renderCountdown();
-    if (this.countdown <= 0) {
-      // Auto-respawn avec bazooka si rien choisi
-      this._confirmPurchase(this.selectedId ?? 'bazooka');
-    }
+    // Intentionally empty — no auto-respawn timer
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -70,7 +56,6 @@ export class ShopUI {
   private render() {
     if (!this.worm) return;
     const w = this.worm;
-    const secs = Math.ceil(this.countdown / 60);
 
     const rows = ALL_WEAPON_IDS.map(id => {
       const def = WEAPON_REGISTRY[id];
@@ -101,9 +86,10 @@ export class ShopUI {
         </div>
         <div class="shop-list" id="shop-list">${rows}</div>
         <div class="shop-footer">
-          <div class="shop-countdown">Respawn dans <b id="shop-secs">${secs}</b>s</div>
           <button class="shop-btn" id="shop-confirm" ${this.selectedId ? '' : 'disabled'}>
-            ${this.selectedId ? `Acheter ${WEAPON_REGISTRY[this.selectedId].icon} ${WEAPON_REGISTRY[this.selectedId].name} → Spawn !` : 'Sélectionnez une arme'}
+            ${this.selectedId
+              ? `${WEAPON_REGISTRY[this.selectedId].icon} ${WEAPON_REGISTRY[this.selectedId].name} → Spawn !`
+              : 'Sélectionnez une arme'}
           </button>
         </div>
       </div>`;
@@ -126,19 +112,13 @@ export class ShopUI {
     });
   }
 
-  private renderCountdown() {
-    const secsEl = this.el.querySelector('#shop-secs');
-    if (secsEl) secsEl.textContent = String(Math.ceil(this.countdown / 60));
-  }
-
   private _confirmPurchase(id: WeaponId) {
     if (!this.worm || !this.onBuy) return;
     const def = WEAPON_REGISTRY[id];
-    // Déduire le coût si non gratuit
+    // Déduire le coût
     if (def.price > 0) {
-      const canAfford = this.worm.money >= def.price;
-      if (!canAfford) {
-        // Fallback bazooka
+      if (this.worm.money < def.price) {
+        // Fallback bazooka gratuit
         this.onBuy('bazooka');
         this.hide();
         return;

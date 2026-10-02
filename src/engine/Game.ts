@@ -682,8 +682,8 @@ export class Game {
               }
               // 🛒 Trigger shop for LOCAL worm if it's the one that just died
               if (w.id === this.getLocalWorm()?.id) {
-                const RESPAWN_FRAMES = 5 * 60; // 5 seconds
-                w.respawnTimer = RESPAWN_FRAMES;
+                const RESPAWN_FRAMES = 5 * 60; // passed to callback for info only
+                w.respawnTimer = 0; // frozen until shop confirms
                 this.onLocalWormDied?.(w, RESPAWN_FRAMES);
               } else {
                 // Remote worms just respawn after a delay
