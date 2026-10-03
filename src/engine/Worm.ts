@@ -391,10 +391,12 @@ export class Worm {
 
     this.shotCooldown = weapon.reloadTime;
 
-    // Apply recoil knockback
-    const recoilForce = weapon.recoil;
-    this.vx -= Math.cos(this.aimAngle) * recoilForce;
-    this.vy -= Math.sin(this.aimAngle) * recoilForce;
+    // Recoil knockback disabled for spells
+    const recoilForce = weapon.recoil || 0;
+    if (recoilForce > 0) {
+      this.vx -= Math.cos(this.aimAngle) * recoilForce;
+      this.vy -= Math.sin(this.aimAngle) * recoilForce;
+    }
 
     // Play spell audio (sampled + synth)
     sound.playSpellForWeapon(weapon.id);
