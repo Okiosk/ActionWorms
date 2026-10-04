@@ -52,6 +52,7 @@ export function generateLayout(
     case 'cave':
     default: genCave(g, hazards); break;
   }
+  g.smoothEdges(2);
   g.border(BORDER);
   return layout;
 }
@@ -128,6 +129,37 @@ class Grid {
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
       this.circle(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, thick / 2, v, only);
+    }
+  }
+
+  /**
+   * Majority filter on dirt/air: removes the 1-pixel bumps and holes left by noise,
+   * so edges are smooth curves (deterministic: same result for every player).
+   */
+  smoothEdges(passes: number) {
+    const { W, H, m } = this;
+    for (let pass = 0; pass < passes; pass++) {
+      const src = m.slice();
+      for (let y = 1; y < H - 1; y++) {
+        for (let x = 1; x < W - 1; x++) {
+          const i = y * W + x;
+          const v = src[i];
+          if (v !== AIR && v !== DIRT) continue;
+          let solid = 0;
+          let other = false;
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              if (dx === 0 && dy === 0) continue;
+              const n = src[i + dy * W + dx];
+              if (n === DIRT) solid++;
+              else if (n !== AIR) other = true;
+            }
+          }
+          if (other) continue; // leave borders with other materials untouched
+          if (v === AIR && solid >= 6) m[i] = DIRT;
+          else if (v === DIRT && solid <= 2) m[i] = AIR;
+        }
+      }
     }
   }
 

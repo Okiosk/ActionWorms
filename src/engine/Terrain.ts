@@ -33,7 +33,11 @@ export class Terrain {
   public height: number;
   public materials: Uint8Array;
 
-  private bgCanvas: HTMLCanvasElement;
+  /** Scenery behind the terrain, painted at 2× resolution so it stays sharp when zoomed */
+  public bgCanvas: HTMLCanvasElement;
+  /** Blood decals (transparent), used by the smooth GPU renderer */
+  public stainCanvas: HTMLCanvasElement;
+  private stainCtx: CanvasRenderingContext2D;
   private groundCanvas: HTMLCanvasElement;
   private groundCtx: CanvasRenderingContext2D;
   private rockCanvas: HTMLCanvasElement;
@@ -43,10 +47,17 @@ export class Terrain {
   private liquidCanvas: HTMLCanvasElement;
   private liquidCtx: CanvasRenderingContext2D;
 
-  private theme: MapTheme = MAP_THEMES.cave;
+  public theme: MapTheme = MAP_THEMES.cave;
   /** Dirt above this line (per column) is foliage (forest canopy) */
-  private canopyLine: Int16Array | null = null;
+  public canopyLine: Int16Array | null = null;
   public mapType: MapType = 'cave';
+
+  // Change tracking for the GPU renderers (each one remembers how far it has read)
+  /** Incremented when the whole map changed (new map / snapshot) */
+  public version = 0;
+  /** Regions where materials changed / blood was added, in order */
+  public readonly changes = new ChangeLog();
+  public readonly stains = new ChangeLog();
 
   constructor(width: number = CONFIG.MAP_WIDTH, height: number = CONFIG.MAP_HEIGHT) {
     this.width = width;
@@ -59,6 +70,10 @@ export class Terrain {
       return c;
     };
     this.bgCanvas = layer();
+    this.bgCanvas.width = width * 2;
+    this.bgCanvas.height = height * 2;
+    this.stainCanvas = layer();
+    this.stainCtx = this.stainCanvas.getContext('2d', { willReadFrequently: true })!;
     this.groundCanvas = layer();
     this.rockCanvas = layer();
     this.acidCanvas = layer();
@@ -186,6 +201,7 @@ export class Terrain {
     }
     if (changed.length > 0) {
       result.modified = true;
+      this.markDirty(minX, minY, maxX, maxY);
       const w = maxX - minX + 1;
       const img = this.groundCtx.getImageData(minX, minY, w, maxY - minY + 1);
       for (let i = 0; i < changed.length; i += 2) {
@@ -229,6 +245,11 @@ export class Terrain {
     this.groundCtx.putImageData(ground, minX, minY);
     this.acidCtx.putImageData(acid, minX, minY);
     this.liquidCtx.putImageData(liquid, minX, minY);
+    this.markDirty(minX, minY, maxX, maxY);
+  }
+
+  private markDirty(x0: number, y0: number, x1: number, y1: number) {
+    this.changes.push({ x0, y0, x1, y1 });
   }
 
   /** Alchemist flask: turns everything but rock and lava into acid. */
@@ -273,9 +294,17 @@ export class Terrain {
     this.groundCtx.globalCompositeOperation = 'source-atop';
     this.groundCtx.fillStyle = Math.random() > 0.4 ? CONFIG.COLORS.BLOOD_FRESH : CONFIG.COLORS.BLOOD_DARK;
     this.groundCtx.beginPath();
-    this.groundCtx.arc(x, y, radius + Math.random() * 1.5, 0, Math.PI * 2);
+    const r = radius + Math.random() * 1.5;
+    this.groundCtx.arc(x, y, r, 0, Math.PI * 2);
     this.groundCtx.fill();
     this.groundCtx.restore();
+
+    this.stainCtx.fillStyle = this.groundCtx.fillStyle;
+    this.stainCtx.beginPath();
+    this.stainCtx.arc(x, y, r, 0, Math.PI * 2);
+    this.stainCtx.fill();
+    const m = Math.ceil(r) + 1;
+    this.stains.push({ x0: Math.floor(x) - m, y0: Math.floor(y) - m, x1: Math.floor(x) + m, y1: Math.floor(y) + m });
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -364,6 +393,10 @@ export class Terrain {
   private renderAll(rand: () => number) {
     const W = this.width;
     const H = this.height;
+    this.version++;
+    this.changes.clear();
+    this.stains.clear();
+    this.stainCtx.clearRect(0, 0, W, H);
     this.paintBackground(rand);
 
     const ground = this.groundCtx.createImageData(W, H);
@@ -477,6 +510,7 @@ export class Terrain {
 
   private paintBackground(rand: () => number) {
     const ctx = this.bgCanvas.getContext('2d')!;
+    ctx.setTransform(2, 0, 0, 2, 0, 0);
     const W = this.width;
     const H = this.height;
     const t = this.theme;
@@ -585,7 +619,7 @@ export class Terrain {
 
   /** Background, ground, rock and acid — drawn under the wizards. */
   public draw(ctx: CanvasRenderingContext2D, time: number) {
-    ctx.drawImage(this.bgCanvas, 0, 0);
+    ctx.drawImage(this.bgCanvas, 0, 0, this.width, this.height);
     ctx.drawImage(this.groundCanvas, 0, 0);
     ctx.drawImage(this.rockCanvas, 0, 0);
     ctx.globalAlpha = 0.7 + Math.sin(time * 0.08) * 0.3;
@@ -602,9 +636,46 @@ export class Terrain {
 
   /** Scaled-down picture of the whole map (lobby preview). */
   public drawPreview(ctx: CanvasRenderingContext2D, w: number, h: number) {
+    ctx.imageSmoothingEnabled = true;
     for (const layer of [this.bgCanvas, this.groundCanvas, this.rockCanvas, this.acidCanvas, this.liquidCanvas]) {
       ctx.drawImage(layer, 0, 0, w, h);
     }
+  }
+}
+
+export type Rect = { x0: number; y0: number; x1: number; y1: number };
+
+/** Append-only list of modified rectangles; readers keep their own position (sequence number). */
+export class ChangeLog {
+  private rects: Rect[] = [];
+  private base = 0; // sequence number of rects[0]
+
+  public get seq(): number {
+    return this.base + this.rects.length;
+  }
+
+  public push(r: Rect) {
+    this.rects.push(r);
+    if (this.rects.length > 512) {
+      this.rects.splice(0, 256);
+      this.base += 256;
+    }
+  }
+
+  public clear() {
+    this.base += this.rects.length;
+    this.rects = [];
+  }
+
+  /** Union of the rectangles added since `from`; 'all' if they were dropped; null if none. */
+  public since(from: number): Rect | 'all' | null {
+    if (from < this.base) return 'all';
+    let u: Rect | null = null;
+    for (let i = from - this.base; i < this.rects.length; i++) {
+      const r = this.rects[i];
+      u = u ? { x0: Math.min(u.x0, r.x0), y0: Math.min(u.y0, r.y0), x1: Math.max(u.x1, r.x1), y1: Math.max(u.y1, r.y1) } : { ...r };
+    }
+    return u;
   }
 }
 

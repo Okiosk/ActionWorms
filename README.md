@@ -53,6 +53,12 @@ Aucun serveur de jeu : l'hôte simule la partie et l'envoie aux autres joueurs 6
 | 🪵 Bois | Résiste aux explosions, mais les sorts de **feu** le brûlent entièrement |
 | 🍄 Champignon | Trampoline : fait rebondir les sorciers (saut = plus haut) et renvoie les sorts |
 
+## Graphismes
+
+Le terrain est simulé pixel par pixel (destructions précises, identiques chez tous les joueurs), mais il est **affiché en rendu lisse** par le GPU (WebGL2) : contours arrondis et anti-aliasés, textures procédurales sans pixels visibles, contour sombre et lumière sur les surfaces. Seules les zones détruites sont renvoyées à la carte graphique, donc les explosions ne coûtent presque rien.
+
+Sans carte graphique (rendu logiciel) ou sans WebGL2, le jeu passe automatiquement en rendu « pixel ». Le choix peut être forcé dans le menu pause (`Échap` → Graphismes).
+
 ## Sorts
 
 19 sorts, chacun avec un effet unique. On gagne de l'or en éliminant des sorciers (+75) et en mourant (+25).
@@ -93,7 +99,8 @@ Ouvre l'URL locale dans plusieurs onglets pour tester le multijoueur. Le déploi
 
 - `src/engine/Game.ts` — boucle de jeu, logique hôte/client, réseau, rendu
 - `src/engine/Worm.ts`, `NinjaRope.ts`, `Projectile.ts` — physique du sorcier, du grappin et des sorts
-- `src/engine/Terrain.ts` — terrain destructible multi-matériaux et son rendu
+- `src/engine/Terrain.ts` — terrain destructible multi-matériaux (et rendu pixel de secours)
+- `src/engine/TerrainGL.ts` — rendu lisse du terrain en WebGL2 (shader)
 - `src/engine/MapGenerator.ts` — génération des 6 cartes
 - `src/net/` — connexion PeerJS et format des messages
 - `src/ui/` — menus et salon, HUD, grimoire

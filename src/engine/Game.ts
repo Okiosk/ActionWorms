@@ -1,5 +1,6 @@
 import { CONFIG } from '../config';
 import { Terrain } from './Terrain';
+import { TerrainGL } from './TerrainGL';
 import { Worm, WormInput, EMPTY_INPUT, WormFx } from './Worm';
 import { Projectile, ProjectileWorld } from './Projectile';
 import { ParticleManager } from './Particles';
@@ -75,6 +76,9 @@ export class Game implements ProjectileWorld {
   private shakeTime = 0;
   private shakeIntensity = 0;
   private zaps: { pts: number[]; life: number }[] = [];
+  /** Smooth WebGL terrain layers, stacked under and over the 2D canvas (null → pixel 2D renderer) */
+  private glSolid: TerrainGL | null = null;
+  private glLiquid: TerrainGL | null = null;
   public camX = CONFIG.MAP_WIDTH / 2;
   public camY = CONFIG.MAP_HEIGHT / 2;
   public camZoom = 3.5;
@@ -99,7 +103,61 @@ export class Game implements ProjectileWorld {
     this.resizeCanvas();
     window.addEventListener('resize', () => this.resizeCanvas());
     this.setupNetworkCallbacks();
+    this.setSmoothTerrain(Game.loadSmoothPreference());
   }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Graphics: smooth (WebGL) or pixel (2D) terrain
+  // ════════════════════════════════════════════════════════════════════════
+
+  /** 'on' / 'off' forced by the player, or null = automatic (smooth when a GPU is available) */
+  private static loadSmoothPreference(): boolean | null {
+    try {
+      const v = localStorage.getItem('arcane_worms_smooth');
+      return v === null ? null : v === '1';
+    } catch {
+      return null;
+    }
+  }
+
+  public get smoothTerrain(): boolean {
+    return !!this.glSolid?.ok && !!this.glLiquid?.ok;
+  }
+
+  /**
+   * Turns the smooth renderer on/off. `null` = automatic: on only with a real GPU.
+   * Returns whether it is active.
+   */
+  public setSmoothTerrain(on: boolean | null): boolean {
+    const want = on !== false;
+    if (want && !this.glSolid) {
+      this.glSolid = TerrainGL.create('solid', on === true);
+      this.glLiquid = this.glSolid ? TerrainGL.create('liquid', on === true) : null;
+      if (this.glSolid && this.glLiquid) {
+        // Layers: [GL background + solids] < [2D wizards & spells] < [GL water & lava]
+        this.canvas.before(this.glSolid.canvas);
+        this.canvas.after(this.glLiquid.canvas);
+      } else {
+        this.glSolid = this.glLiquid = null;
+      }
+    }
+    const active = want && this.smoothTerrain;
+    for (const gl of [this.glSolid, this.glLiquid]) {
+      if (gl) gl.canvas.style.display = active ? '' : 'none';
+    }
+    this.canvas.classList.toggle('over-terrain', active);
+    if (on !== null) {
+      try {
+        localStorage.setItem('arcane_worms_smooth', on ? '1' : '0');
+      } catch {
+        // storage unavailable
+      }
+    }
+    this.smoothActive = active;
+    return active;
+  }
+  /** Smooth renderer currently used */
+  public smoothActive = false;
 
   // ════════════════════════════════════════════════════════════════════════
   // Accessors
@@ -1174,27 +1232,46 @@ export class Game implements ProjectileWorld {
     const alpha = this.renderAlpha(now);
     this.updateCamera(now, alpha);
 
-    ctx.imageSmoothingEnabled = false;
-    ctx.fillStyle = '#0a0a0a';
-    ctx.fillRect(0, 0, cw, ch);
+    let sx = 0;
+    let sy = 0;
+    if (this.shakeTime > 0) {
+      sx = (Math.random() - 0.5) * this.shakeIntensity / 2;
+      sy = (Math.random() - 0.5) * this.shakeIntensity / 2;
+    }
+    if (this.smoothActive && !this.smoothTerrain) {
+      // GPU context lost (driver reset…): fall back to the pixel renderer
+      for (const gl of [this.glSolid, this.glLiquid]) if (gl) gl.canvas.style.display = 'none';
+      this.canvas.classList.remove('over-terrain');
+      this.smoothActive = false;
+    }
+    const smooth = this.smoothActive;
+    const view = { camX: this.camX - sx, camY: this.camY - sy, zoom: this.camZoom, time: this.frame };
+
+    if (smooth) {
+      // GPU layers below (terrain) and above (liquids); this canvas only holds the entities
+      this.glSolid!.render(this.terrain, view, cw, ch);
+      this.glLiquid!.render(this.terrain, view, cw, ch);
+      ctx.clearRect(0, 0, cw, ch);
+    } else {
+      ctx.imageSmoothingEnabled = false;
+      ctx.fillStyle = '#0a0a0a';
+      ctx.fillRect(0, 0, cw, ch);
+    }
 
     ctx.save();
     ctx.translate(cw / 2, ch / 2);
     ctx.scale(this.camZoom, this.camZoom);
-    ctx.translate(-this.camX, -this.camY);
-    if (this.shakeTime > 0) {
-      ctx.translate((Math.random() - 0.5) * this.shakeIntensity / 2, (Math.random() - 0.5) * this.shakeIntensity / 2);
-    }
+    ctx.translate(-this.camX + sx, -this.camY + sy);
 
-    this.terrain.draw(ctx, this.frame);
+    if (!smooth) this.terrain.draw(ctx, this.frame);
     if (this.modifiers.gameMode === 'koth') this.drawKothZone(ctx);
     this.particles.draw(ctx);
     for (const p of this.projectiles) p.draw(ctx, alpha);
     this.drawZaps(ctx);
     for (const w of this.worms) w.draw(ctx, alpha, w.id === this.localId);
-    this.terrain.drawLiquids(ctx, this.frame);
-
+    if (!smooth) this.terrain.drawLiquids(ctx, this.frame);
     ctx.restore();
+
     this.drawOffScreenIndicators();
   }
 
