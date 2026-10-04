@@ -63,6 +63,8 @@ export interface WormNetState {
   aim: number;
   weapon: WeaponId;
   frozen: number;
+  shield: number;
+  burn: number;
   rope: RopeState;
   hx: number;
   hy: number;
@@ -88,6 +90,9 @@ export type NetEvent =
   | { t: 'acid'; x: number; y: number; r: number }
   | { t: 'blood'; x: number; y: number; n: number }
   | { t: 'shot'; id: string; w: WeaponId }
+  | { t: 'fill'; x: number; y: number; r: number; keep: number[] }
+  | { t: 'tp'; x0: number; y0: number; x1: number; y1: number }
+  | { t: 'zap'; pts: number[] }
   | { t: 'kill'; killer: string | null; victim: string; cause?: 'acid' | 'self' };
 
 export type NetMessage =

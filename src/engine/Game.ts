@@ -71,6 +71,7 @@ export class Game implements ProjectileWorld {
   private frame = 0;
   private shakeTime = 0;
   private shakeIntensity = 0;
+  private zaps: { pts: number[]; life: number }[] = [];
   public camX = CONFIG.MAP_WIDTH / 2;
   public camY = CONFIG.MAP_HEIGHT / 2;
   public camZoom = 3.5;
@@ -424,6 +425,18 @@ export class Game implements ProjectileWorld {
     } else if (this.phase === 'playing') {
       this.updateHost();
     }
+    // Burning wizards smoke (host and clients)
+    if (this.frame % 2 === 0) {
+      for (const w of this.worms) {
+        if (w.isAlive() && w.burnTimer > 0) {
+          this.particles.spawn(w.x + (Math.random() - 0.5) * 8, w.y + (Math.random() - 0.5) * 8,
+            (Math.random() - 0.5) * 0.4, -0.6, 'fire', undefined, 2.2, 16);
+        }
+      }
+    }
+    for (let i = this.zaps.length - 1; i >= 0; i--) {
+      if (--this.zaps[i].life <= 0) this.zaps.splice(i, 1);
+    }
     this.particles.update(this.terrain);
   }
 
@@ -485,6 +498,16 @@ export class Game implements ProjectileWorld {
         onShoot: (w, weapon, angle) => this.hostShoot(w, weapon, angle),
         playSounds: worm.id === this.localId
       });
+
+      // Status effects
+      if (worm.shieldTimer > 0) worm.shieldTimer--;
+      if (worm.burnTimer > 0) {
+        if (!worm.isAlive()) {
+          worm.burnTimer = 0;
+        } else if (--worm.burnTimer % 10 === 0) {
+          this.damageWorm(worm, 2, 0, 0, worm.burnBy, true);
+        }
+      }
     }
 
     // 2. Acid burns (10×/s)
@@ -529,21 +552,19 @@ export class Game implements ProjectileWorld {
   }
 
   private hostShoot(worm: Worm, weapon: WeaponDef, angle: number) {
+    if (weapon.shieldDuration) {
+      worm.shieldTimer = weapon.shieldDuration;
+      this.castFX(worm, weapon, angle);
+      this.emit({ t: 'shot', id: worm.id, w: weapon.id });
+      return;
+    }
     const ox = worm.x + Math.cos(angle) * 9;
     const oy = worm.y + Math.sin(angle) * 9;
     const count = weapon.pelletCount ?? 1;
     for (let i = 0; i < count; i++) {
       const a = angle + (Math.random() - 0.5) * weapon.spread;
       const speed = weapon.projectileSpeed * (count > 1 ? 0.9 + Math.random() * 0.2 : 1);
-      this.projectiles.push(new Projectile({
-        id: this.nextProjectileId++,
-        ownerId: worm.id,
-        weapon,
-        x: ox,
-        y: oy,
-        vx: Math.cos(a) * speed,
-        vy: Math.sin(a) * speed
-      }));
+      this.spawnProjectile(worm.id, weapon, ox, oy, Math.cos(a) * speed, Math.sin(a) * speed);
     }
     this.castFX(worm, weapon, angle);
     this.emit({ t: 'shot', id: worm.id, w: weapon.id });
@@ -561,21 +582,48 @@ export class Game implements ProjectileWorld {
   public explode(p: Projectile, directHit: Worm | null) {
     const mods = this.modifiers;
     const weapon = p.weapon;
-    const r = weapon.craterRadius * mods.explosionScale;
     const x = p.x;
     const y = p.y;
+    const q = Math.round;
 
-    if (this.terrain.carveCircle(x, y, r)) {
-      this.emit({ t: 'crater', x: Math.round(x), y: Math.round(y), r: Math.round(r * 10) / 10 });
+    // Rempart: builds terrain instead of blasting it
+    if (weapon.buildRadius) {
+      const keep = this.worms.filter(w => w.isAlive()).flatMap(w => [q(w.x), q(w.y)]);
+      this.terrain.addDirt(x, y, weapon.buildRadius, keep);
+      this.emit({ t: 'fill', x: q(x), y: q(y), r: weapon.buildRadius, keep });
+      this.particles.spawnExplosionFX(x, y, 8, '#c08040');
+      sound.playGrenadeBounce();
+      return;
     }
+
+    const r = weapon.craterRadius * mods.explosionScale;
+    if (this.terrain.carveCircle(x, y, r)) {
+      this.emit({ t: 'crater', x: q(x), y: q(y), r: Math.round(r * 10) / 10 });
+    }
+
+    // Translocation: the caster appears where the orb stopped
+    if (weapon.teleport) {
+      const owner = this.worms.find(w => w.id === p.ownerId && w.isAlive());
+      if (owner) {
+        const from = { x: owner.x, y: owner.y };
+        owner.x = owner.prevX = x;
+        owner.y = owner.prevY = y;
+        owner.vx = owner.vy = 0;
+        owner.rope.release();
+        this.teleportFX(from.x, from.y, x, y);
+        this.emit({ t: 'tp', x0: q(from.x), y0: q(from.y), x1: q(x), y1: q(y) });
+      }
+      return;
+    }
+
     this.explosionFX(x, y, r, weapon.elementColor);
-    this.emit({ t: 'boom', x: Math.round(x), y: Math.round(y), r: Math.round(r), c: weapon.elementColor });
+    this.emit({ t: 'boom', x: q(x), y: q(y), r: q(r), c: weapon.elementColor });
 
     // Damage: full damage on a direct hit, splash with falloff around
     const blast = Math.max(r * 1.5, 6);
     const knockScale = Math.min(5, 0.5 + weapon.damage / 12);
     for (const w of this.worms) {
-      if (!w.isAlive()) continue;
+      if (!w.isAlive() || w.id === p.reflectedBy) continue;
       const dx = w.x - x;
       const dy = w.y - y;
       const dist = Math.hypot(dx, dy);
@@ -596,7 +644,33 @@ export class Game implements ProjectileWorld {
         kx = p.vx / sp;
         ky = p.vy / sp;
       }
-      this.damageWorm(w, Math.round(weapon.damage * falloff), kx * knockScale * falloff, ky * knockScale * falloff, p.ownerId);
+      const dealt = this.damageWorm(w, Math.round(weapon.damage * falloff), kx * knockScale * falloff, ky * knockScale * falloff, p.ownerId);
+      this.applyHitEffects(p, w, dealt);
+    }
+
+    // Arc Foudroyant: the bolt jumps from wizard to wizard
+    if (weapon.chainTargets) {
+      const hit = new Set<Worm>();
+      let current = directHit ?? this.nearestEnemy(x, y, 50, p.ownerId, hit);
+      const pts = [q(x), q(y)];
+      if (current && current !== directHit) {
+        this.applyHitEffects(p, current, this.damageWorm(current, weapon.damage, 0, -1, p.ownerId));
+      }
+      let dmg = weapon.damage;
+      for (let i = 0; current && i <= weapon.chainTargets; i++) {
+        hit.add(current);
+        pts.push(q(current.x), q(current.y));
+        if (i === weapon.chainTargets) break;
+        const next = this.nearestEnemy(current.x, current.y, 100, p.ownerId, hit);
+        if (!next) break;
+        dmg = Math.round(dmg * 0.75);
+        this.damageWorm(next, dmg, (next.x - current.x) * 0.02, -1, p.ownerId);
+        current = next;
+      }
+      if (pts.length > 2) {
+        this.addZap(pts);
+        this.emit({ t: 'zap', pts });
+      }
     }
 
     if (weapon.freezeDuration) {
@@ -608,33 +682,68 @@ export class Game implements ProjectileWorld {
     }
 
     if (weapon.acidPool && mods.acidEnabled) {
-      const ar = Math.round(r + 5);
+      const ar = q(r + 5);
       this.terrain.addAcid(x, y, ar);
-      this.emit({ t: 'acid', x: Math.round(x), y: Math.round(y), r: ar });
+      this.emit({ t: 'acid', x: q(x), y: q(y), r: ar });
     }
 
-    if (weapon.toxic && directHit) {
-      this.particles.spawnBloodBurst(x, y, 12);
-    }
-
+    // Comète: splits into bouncing star shards
     if (weapon.splitCount && !p.isSubCluster) {
-      const subWeapon: WeaponDef = { ...weapon, damage: 20, craterRadius: 12, bounces: 2, splitCount: undefined };
+      const shard: WeaponDef = { ...weapon, damage: 20, craterRadius: 12, bounces: 2, splitCount: undefined };
       for (let i = 0; i < weapon.splitCount; i++) {
         const a = (Math.PI * 2 * i) / weapon.splitCount + (Math.random() - 0.5) * 0.4;
         const speed = 2.5 + Math.random() * 3.5;
-        const sub = new Projectile({
-          id: this.nextProjectileId++,
-          ownerId: p.ownerId,
-          weapon: { ...subWeapon, fuseFrames: 30 + Math.floor(Math.random() * 25) },
-          x,
-          y: y - 2,
-          vx: Math.cos(a) * speed,
-          vy: Math.sin(a) * speed - 1.5,
-          isSubCluster: true
-        });
-        this.projectiles.push(sub);
+        this.spawnProjectile(p.ownerId, { ...shard, fuseFrames: 30 + Math.floor(Math.random() * 25) },
+          x, y - 2, Math.cos(a) * speed, Math.sin(a) * speed - 1.5, true);
       }
     }
+
+    // Pluie de météores: rocks fall from the ceiling above the beacon
+    if (weapon.meteorCount && !p.isSubCluster) {
+      const rock: WeaponDef = {
+        ...weapon, damage: 32, craterRadius: 14, fuseFrames: 240, gravityScale: 1, meteorCount: undefined
+      };
+      for (let i = 0; i < weapon.meteorCount; i++) {
+        const sx = x + (i - (weapon.meteorCount - 1) / 2) * 14 + (Math.random() - 0.5) * 6;
+        let sy = y - 4;
+        while (sy > y - 170 && sy > 14 && !this.terrain.isSolid(sx, sy - 1)) sy--;
+        this.spawnProjectile(p.ownerId, rock, sx, sy + 2, (Math.random() - 0.5) * 0.4, 0.3 + Math.random() * 1.2, true);
+      }
+    }
+  }
+
+  /** Per-hit effects of the spell that touched a wizard (burning, life steal). */
+  private applyHitEffects(p: Projectile, w: Worm, dealt: number) {
+    if (dealt <= 0) return;
+    const weapon = p.weapon;
+    if (weapon.burnDuration && w.id !== p.ownerId) {
+      w.burnTimer = Math.max(w.burnTimer, weapon.burnDuration);
+      w.burnBy = p.ownerId;
+    }
+    if (weapon.lifesteal) {
+      const caster = this.worms.find(c => c.id === p.ownerId && c.isAlive());
+      if (caster && caster !== w) caster.health = Math.min(caster.maxHealth, caster.health + Math.round(dealt * weapon.lifesteal));
+    }
+  }
+
+  private nearestEnemy(x: number, y: number, range: number, ownerId: string, exclude: Set<Worm>): Worm | null {
+    let best: Worm | null = null;
+    let bestDist = range;
+    const teams = this.modifiers.gameMode === 'teams';
+    for (const w of this.worms) {
+      if (!w.isAlive() || w.id === ownerId || exclude.has(w)) continue;
+      if (teams && this.teamOf(w.id) === this.teamOf(ownerId)) continue;
+      const d = Math.hypot(w.x - x, w.y - y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = w;
+      }
+    }
+    return best;
+  }
+
+  private spawnProjectile(ownerId: string, weapon: WeaponDef, x: number, y: number, vx: number, vy: number, isSubCluster = false) {
+    this.projectiles.push(new Projectile({ id: this.nextProjectileId++, ownerId, weapon, x, y, vx, vy, isSubCluster }));
   }
 
   public pierce(p: Projectile, x0: number, y0: number, x1: number, y1: number) {
@@ -645,12 +754,16 @@ export class Game implements ProjectileWorld {
     }
   }
 
-  public bounce(p: Projectile) {
-    if (p.weapon.id === 'bouncy_ball') sound.playBouncy();
-    else sound.playGrenadeBounce();
+  public bounce() {
+    sound.playGrenadeBounce();
   }
 
-  private damageWorm(w: Worm, damage: number, kx: number, ky: number, attackerId: string) {
+  public reflect() {
+    sound.playBouncy();
+  }
+
+  /** Applies match rules (self damage, friendly fire, scale) and returns the damage dealt. */
+  private damageWorm(w: Worm, damage: number, kx: number, ky: number, attackerId: string, quiet = false): number {
     const mods = this.modifiers;
     const self = attackerId === w.id;
     let dmg = damage;
@@ -659,13 +772,14 @@ export class Game implements ProjectileWorld {
     dmg = Math.round(dmg * mods.damageScale);
 
     w.takeDamage(dmg, kx, ky);
-    if (dmg > 0) {
+    if (dmg > 0 && !quiet) {
       const n = Math.max(3, Math.min(25, Math.round(dmg / 2)));
       this.particles.spawnBloodBurst(w.x, w.y, n);
       this.emit({ t: 'blood', x: Math.round(w.x), y: Math.round(w.y), n });
       sound.playHurt();
     }
     if (!w.isAlive()) this.onWormKilled(w, attackerId);
+    return dmg;
   }
 
   private onWormKilled(victim: Worm, attackerId: string) {
@@ -700,6 +814,21 @@ export class Game implements ProjectileWorld {
     }
 
     if (victim.id === this.localId && this.phase === 'playing') this.onLocalDeath?.(victim);
+  }
+
+  private addZap(pts: number[]) {
+    this.zaps.push({ pts, life: 14 });
+    sound.playRailgun();
+  }
+
+  private teleportFX(x0: number, y0: number, x1: number, y1: number) {
+    for (const [x, y] of [[x0, y0], [x1, y1]]) {
+      for (let i = 0; i < 14; i++) {
+        const a = Math.random() * Math.PI * 2;
+        this.particles.spawn(x, y, Math.cos(a) * 1.5, Math.sin(a) * 1.5, 'spark', '#b48cff', 2, 25);
+      }
+    }
+    sound.playVortex();
   }
 
   private explosionFX(x: number, y: number, r: number, color?: string) {
@@ -737,6 +866,8 @@ export class Game implements ProjectileWorld {
       aim: r2(w.aimAngle),
       weapon: w.weapon.id,
       frozen: w.freezeTimer,
+      shield: w.shieldTimer,
+      burn: w.burnTimer,
       rope: w.rope.state,
       hx: r1(w.rope.hookX),
       hy: r1(w.rope.hookY),
@@ -793,6 +924,17 @@ export class Game implements ProjectileWorld {
         if (w) this.castFX(w, WEAPON_REGISTRY[ev.w], w.aimAngle);
         break;
       }
+      case 'fill':
+        this.terrain.addDirt(ev.x, ev.y, ev.r, ev.keep);
+        this.particles.spawnExplosionFX(ev.x, ev.y, 8, '#c08040');
+        sound.playGrenadeBounce();
+        break;
+      case 'tp':
+        this.teleportFX(ev.x0, ev.y0, ev.x1, ev.y1);
+        break;
+      case 'zap':
+        this.addZap(ev.pts);
+        break;
       case 'kill':
         this.onKill?.(ev.killer, ev.victim, ev.cause);
         break;
@@ -825,6 +967,8 @@ export class Game implements ProjectileWorld {
       worm.score = ws.score;
       worm.money = ws.money;
       worm.health = ws.hp;
+      worm.shieldTimer = ws.shield;
+      worm.burnTimer = ws.burn;
 
       if (ws.hp <= 0) {
         worm.rope.release();
@@ -1009,10 +1153,39 @@ export class Game implements ProjectileWorld {
     if (this.modifiers.gameMode === 'koth') this.drawKothZone(ctx);
     this.particles.draw(ctx);
     for (const p of this.projectiles) p.draw(ctx, alpha);
+    this.drawZaps(ctx);
     for (const w of this.worms) w.draw(ctx, alpha, w.id === this.localId);
 
     ctx.restore();
     this.drawOffScreenIndicators();
+  }
+
+  /** Jagged lightning arcs of the Arc Foudroyant */
+  private drawZaps(ctx: CanvasRenderingContext2D) {
+    if (this.zaps.length === 0) return;
+    ctx.save();
+    ctx.shadowColor = '#9fe8ff';
+    ctx.shadowBlur = 10;
+    ctx.lineJoin = 'round';
+    for (const z of this.zaps) {
+      ctx.globalAlpha = Math.min(1, z.life / 8);
+      for (const [width, color] of [[2.4, '#6fd6ff'], [1, '#ffffff']] as const) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
+        ctx.beginPath();
+        ctx.moveTo(z.pts[0], z.pts[1]);
+        for (let i = 2; i + 1 < z.pts.length; i += 2) {
+          const x0 = z.pts[i - 2], y0 = z.pts[i - 1], x1 = z.pts[i], y1 = z.pts[i + 1];
+          for (let k = 1; k <= 4; k++) {
+            const t = k / 5;
+            ctx.lineTo(x0 + (x1 - x0) * t + (Math.random() - 0.5) * 6, y0 + (y1 - y0) * t + (Math.random() - 0.5) * 6);
+          }
+          ctx.lineTo(x1, y1);
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 
   private drawKothZone(ctx: CanvasRenderingContext2D) {

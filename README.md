@@ -30,7 +30,29 @@ Aucun serveur de jeu : l'hôte simule la partie et l'envoie aux autres joueurs 6
 
 ## Sorts
 
-19 sorts, du gratuit (Boule de feu, Éclats arcaniques, Choc d'étincelles) aux sorts majeurs (Météorite, Foudre divine, Singularité du néant…). On gagne de l'or en éliminant des sorciers (+75) et en mourant (+25).
+19 sorts, chacun avec un effet unique. On gagne de l'or en éliminant des sorciers (+75) et en mourant (+25).
+
+| Sort | Effet |
+|---|---|
+| 🔥 Boule de Feu (gratuit) | Projectile explosif polyvalent |
+| ✨ Éclats Arcaniques (gratuit) | Rafale rapide de petits cristaux |
+| ⚡ Choc d'Étincelles (gratuit) | 8 étincelles en éventail, à bout portant |
+| 🔮 Orbe du Chaos | Rebondit puis explose après 2 s |
+| 🐉 Souffle du Dragon | Flammes qui montent et **enflamment** la cible (dégâts sur 3 s) |
+| 🪃 Chakram Envoûté | Revient vers son lanceur, touche à l'aller et au retour |
+| 🧱 Rempart Tellurique | **Crée de la terre** : bouche un tunnel, construit un abri |
+| 🪨 Rune Piégée | Piège collé au sol, explose à l'approche |
+| 🩸 Sangsue Écarlate | **Soigne** le lanceur des dégâts infligés |
+| 🌀 Translocation | **Téléporte** le lanceur là où l'orbe s'arrête |
+| ⭐ Comète Étoilée | Se divise en 6 éclats explosifs |
+| 🧪 Fiole d'Alchimiste | Laisse une **mare d'acide** permanente |
+| 👻 Feu Follet Traqueur | Poursuit l'ennemi le plus proche |
+| ❄️ Orbe de Givre | **Gèle** les sorciers proches 3 s |
+| 🛡️ Égide Miroir | Bouclier de 2,5 s qui **renvoie** les sorts ennemis |
+| 🌩️ Arc Foudroyant | Éclair qui **rebondit** sur jusqu'à 3 sorciers |
+| ☄️ Pluie de Météores | Marque une cible, des **météores tombent du plafond** |
+| 🔱 Foudre Divine | Rayon qui traverse terre et roche |
+| 🕳️ Singularité du Néant | Trou noir qui **aspire** les ennemis |
 
 ## Développement
 

@@ -735,6 +735,41 @@ export class Terrain {
     this.acidCtx.putImageData(acidImg, minX, minY);
   }
 
+  /**
+   * Rempart Tellurique: turns air inside a circle into dirt, leaving room around the
+   * given points (wizards, as flat [x0, y0, x1, y1, …]) so nobody gets buried.
+   */
+  public addDirt(cx: number, cy: number, r: number, keepClear: number[]) {
+    cx = Math.round(cx);
+    cy = Math.round(cy);
+    const minX = Math.max(0, cx - r);
+    const maxX = Math.min(this.width - 1, cx + r);
+    const minY = Math.max(0, cy - r);
+    const maxY = Math.min(this.height - 1, cy + r);
+    const w = maxX - minX + 1;
+    const h = maxY - minY + 1;
+    if (w <= 0 || h <= 0) return;
+
+    const img = this.dirtCtx.getImageData(minX, minY, w, h);
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        const idx = y * this.width + x;
+        if (this.materials[idx] !== CONFIG.MAT_AIR) continue;
+        // Slightly irregular edge
+        const d = Math.hypot(x - cx, y - cy) + Math.sin(x * 0.9 + y * 0.6) * 1.2;
+        if (d > r) continue;
+        let blocked = false;
+        for (let k = 0; k + 1 < keepClear.length; k += 2) {
+          if (Math.hypot(x - keepClear[k], y - keepClear[k + 1]) < 9) { blocked = true; break; }
+        }
+        if (blocked) continue;
+        this.materials[idx] = CONFIG.MAT_DIRT;
+        this.paintDirtPixel(img.data, ((y - minY) * w + (x - minX)) * 4, x, y, Math.random);
+      }
+    }
+    this.dirtCtx.putImageData(img, minX, minY);
+  }
+
   /** Stains a blood splat onto the dirt canvas (purely visual). */
   public addBlood(x: number, y: number, radius: number = 2) {
     if (!this.isInBounds(x, y)) return;
@@ -853,12 +888,7 @@ export class Terrain {
         const mat     = this.materials[idx];
 
         if (mat === CONFIG.MAT_DIRT) {
-          // Organic brown noise – matches authentic Liero palette
-          const noise = (Math.sin(x * 0.15) + Math.cos(y * 0.15) + (rand() - 0.5) * 1.2) / 3;
-          dirtData[pixIdx]     = Math.max(0, Math.min(255, Math.floor(120 + noise * 35)));
-          dirtData[pixIdx + 1] = Math.max(0, Math.min(255, Math.floor(75  + noise * 25)));
-          dirtData[pixIdx + 2] = Math.max(0, Math.min(255, Math.floor(40  + noise * 18)));
-          dirtData[pixIdx + 3] = 255;
+          this.paintDirtPixel(dirtData, pixIdx, x, y, rand);
 
         } else if (mat === CONFIG.MAT_ROCK) {
           // Cold granite with subtle blue-grey flecks
@@ -878,6 +908,15 @@ export class Terrain {
     this.dirtCtx.putImageData(dirtImgData, 0, 0);
     this.rockCtx.putImageData(rockImgData, 0, 0);
     this.acidCtx.putImageData(acidImgData, 0, 0);
+  }
+
+  /** Organic brown noise – authentic Liero palette */
+  private paintDirtPixel(data: Uint8ClampedArray, p: number, x: number, y: number, rand: () => number) {
+    const noise = (Math.sin(x * 0.15) + Math.cos(y * 0.15) + (rand() - 0.5) * 1.2) / 3;
+    data[p] = Math.floor(120 + noise * 35);
+    data[p + 1] = Math.floor(75 + noise * 25);
+    data[p + 2] = Math.floor(40 + noise * 18);
+    data[p + 3] = 255;
   }
 
   /** Toxic bright-green with slight luminance noise */

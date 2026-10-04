@@ -15,6 +15,8 @@ export interface ProjectileWorld {
   pierce(p: Projectile, x0: number, y0: number, x1: number, y1: number): void;
   /** A bouncing spell hit the ground hard. */
   bounce(p: Projectile): void;
+  /** A spell was sent back by a mirror shield. */
+  reflect(p: Projectile): void;
 }
 
 export interface ProjectileParams {
@@ -50,6 +52,8 @@ export class Projectile {
   public isSubCluster: boolean;
   /** Lying still on the ground (grenades that stopped rolling, rune traps) */
   public resting: boolean = false;
+  /** Wizard whose mirror shield sent this spell back (immune to it) */
+  public reflectedBy: string = '';
   /** Chakram flying back to its caster */
   private returning: boolean = false;
   /** Rune trap armed — set by the host, synced for rendering on clients */
@@ -139,6 +143,28 @@ export class Projectile {
       const nx = this.x + stepX;
       const ny = this.y + stepY;
 
+      // Enemy mirror shields send the spell back
+      for (const w of worms) {
+        if (w.shieldTimer <= 0 || !w.isAlive() || w.id === this.ownerId) continue;
+        const dx = nx - w.x;
+        const dy = ny - w.y;
+        const d = Math.hypot(dx, dy);
+        if (d > 15 || d < 0.01) continue;
+        const nnx = dx / d;
+        const nny = dy / d;
+        const dot = this.vx * nnx + this.vy * nny;
+        if (dot < 0) {
+          this.vx -= 2 * dot * nnx;
+          this.vy -= 2 * dot * nny;
+        }
+        this.ownerId = w.id;
+        this.reflectedBy = w.id;
+        this.age = Math.max(this.age, SELF_HIT_DELAY);
+        this.returning = false;
+        world.reflect(this);
+        return;
+      }
+
       // Wizards
       for (const w of worms) {
         if (!w.isAlive()) continue;
@@ -203,8 +229,8 @@ export class Projectile {
       world.bounce(this);
     }
 
-    const restitution = this.weapon.id === 'bouncy_ball' ? 0.95 : 0.55;
-    const friction = this.weapon.id === 'bouncy_ball' ? 0.98 : 0.85;
+    const restitution = 0.55;
+    const friction = 0.85;
     const tx = this.vx - dot * nx;
     const ty = this.vy - dot * ny;
     this.vx = tx * friction - dot * nx * restitution;
@@ -272,27 +298,54 @@ export class Projectile {
     const id = this.weapon.id;
     const x = this.x;
     const y = this.y;
+    const r = () => Math.random() - 0.5;
     if (this.resting) return;
-    if (id === 'bazooka' || id === 'flamer') {
-      particles.spawn(x, y, (Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.4, 'fire', undefined, 2.5, 20);
-      particles.spawn(x, y, -this.vx * 0.15, -this.vy * 0.15, 'smoke', undefined, 2.0, 25);
-    } else if (id === 'mortar') {
-      particles.spawn(x, y, -this.vx * 0.2, -this.vy * 0.2, 'smoke', undefined, 3.0, 30);
-      particles.spawn(x, y, (Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5, 'fire', undefined, 2.0, 15);
-    } else if (id === 'homing_missile') {
-      particles.spawn(x, y, (Math.random() - 0.5) * 0.3, (Math.random() - 0.5) * 0.3, 'spark', '#38bdf8', 2.0, 18);
-    } else if (id === 'railgun' || id === 'gauss') {
-      particles.spawn(x, y, 0, 0, 'spark', this.weapon.elementColor, 2.0, 15);
-    } else if (id === 'bouncy_ball') {
-      particles.spawn(x, y, -this.vx * 0.1, -this.vy * 0.1, 'spark', '#d946ef', 1.8, 12);
-    } else if (id === 'vortex') {
-      particles.spawn(x, y, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2, 'smoke', '#7c3aed', 3.0, 20);
-    } else if (id === 'acid_bomb') {
-      particles.spawn(x, y, (Math.random() - 0.5) * 0.5, -0.5, 'spark', '#22c55e', 2.0, 15);
-    } else if (id === 'freeze_bomb') {
-      particles.spawn(x, y, (Math.random() - 0.5) * 0.5, -0.5, 'spark', '#bae6fd', 1.8, 15);
-    } else if (id === 'boomerang') {
-      particles.spawn(x, y, 0, 0, 'spark', '#f59e0b', 1.5, 10);
+    switch (id) {
+      case 'bazooka':
+        particles.spawn(x, y, r() * 0.4, r() * 0.4, 'fire', undefined, 2.5, 20);
+        particles.spawn(x, y, -this.vx * 0.15, -this.vy * 0.15, 'smoke', undefined, 2.0, 25);
+        break;
+      case 'flamer':
+        particles.spawn(x, y, r() * 0.4, -0.3, 'fire', undefined, 2.5, 14);
+        break;
+      case 'homing_missile':
+        particles.spawn(x, y, r() * 0.3, r() * 0.3, 'spark', '#38bdf8', 2.0, 18);
+        break;
+      case 'railgun':
+        particles.spawn(x, y, 0, 0, 'spark', this.weapon.elementColor, 2.0, 15);
+        break;
+      case 'vortex':
+        particles.spawn(x, y, r() * 2, r() * 2, 'smoke', '#7c3aed', 3.0, 20);
+        break;
+      case 'acid_bomb':
+        particles.spawn(x, y, r() * 0.5, -0.5, 'spark', '#22c55e', 2.0, 15);
+        break;
+      case 'freeze_bomb':
+        particles.spawn(x, y, r() * 0.5, -0.5, 'spark', '#bae6fd', 1.8, 15);
+        break;
+      case 'boomerang':
+        particles.spawn(x, y, 0, 0, 'spark', '#f59e0b', 1.5, 10);
+        break;
+      case 'earth_wall':
+        if (this.age % 3 === 0) particles.spawn(x, y, r() * 0.5, 0, 'dirt', undefined, 1.5, 20);
+        break;
+      case 'leech':
+        particles.spawn(x, y, r() * 0.3, r() * 0.3, 'blood', undefined, 1.2, 15);
+        break;
+      case 'teleport':
+        particles.spawn(x + r() * 6, y + r() * 6, 0, 0, 'spark', '#b48cff', 1.5, 14);
+        break;
+      case 'chain_lightning':
+        particles.spawn(x, y, r() * 1.5, r() * 1.5, 'spark', '#cff6ff', 1.2, 8);
+        break;
+      case 'meteor':
+        if (this.isSubCluster) {
+          particles.spawn(x, y, r() * 0.5, -0.5, 'fire', undefined, 3, 18);
+          particles.spawn(x, y, -this.vx * 0.2, -this.vy * 0.2, 'smoke', undefined, 3.0, 30);
+        } else if (this.age % 4 === 0) {
+          particles.spawn(x, y, r() * 0.3, -0.4, 'spark', '#ff9a40', 1.5, 16);
+        }
+        break;
     }
   }
 
@@ -323,21 +376,6 @@ export class Projectile {
       ctx.beginPath();
       ctx.arc(x, y, 2.2, 0, Math.PI * 2);
       ctx.fill();
-    } else if (this.weapon.id === 'mortar') {
-      // Météore Déferlant (Falling Meteor)
-      const angle = Math.atan2(this.vy, this.vx);
-      ctx.translate(x, y);
-      ctx.rotate(angle);
-      ctx.shadowColor = '#ff6600';
-      ctx.shadowBlur = 8;
-      ctx.fillStyle = '#4a2511';
-      ctx.beginPath();
-      ctx.arc(0, 0, 6.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#ff6600';
-      ctx.fillRect(-3, -2, 6, 4);
-      ctx.fillStyle = '#ffee44';
-      ctx.fillRect(-1, -1, 3, 2);
     } else if (this.weapon.id === 'grenade' || this.weapon.id === 'chiquita') {
       // Orbe Instable / Orbe de Scission (Arcane / Celestial Orbs)
       const pulse = 0.5 + 0.5 * Math.sin(Date.now() * 0.015);
@@ -369,23 +407,6 @@ export class Projectile {
       ctx.moveTo(x, y - 3);
       ctx.lineTo(x, y + 3);
       ctx.stroke();
-    } else if (this.weapon.id === 'gauss') {
-      // Rayon Astral (Astral Ray)
-      ctx.shadowColor = '#38bdf8';
-      ctx.shadowBlur = 10;
-      ctx.strokeStyle = '#38bdf8';
-      ctx.lineWidth = 3.0;
-      ctx.beginPath();
-      ctx.moveTo(x - this.vx * 0.85, y - this.vy * 0.85);
-      ctx.lineTo(x, y);
-      ctx.stroke();
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-      ctx.fill();
     } else if (this.weapon.id === 'homing_missile') {
       // Feu Follet Traqueur (Seeking Wisp)
       const pulse = 0.5 + 0.5 * Math.sin(Date.now() * 0.02);
@@ -416,28 +437,6 @@ export class Projectile {
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 1.8;
       ctx.stroke();
-    } else if (this.weapon.id === 'bouncy_ball') {
-      // Sphère Chaotique (Chaos Sphere)
-      ctx.shadowColor = '#d946ef';
-      ctx.shadowBlur = 9;
-      ctx.fillStyle = '#d946ef';
-      ctx.beginPath();
-      ctx.arc(x, y, 4.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = '#fbcfe8';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-    } else if (this.weapon.id === 'dart_gun') {
-      // Dards Empoisonnés (Venomous Darts)
-      const angle = Math.atan2(this.vy, this.vx);
-      ctx.translate(x, y);
-      ctx.rotate(angle);
-      ctx.shadowColor = '#22c55e';
-      ctx.shadowBlur = 6;
-      ctx.fillStyle = '#15803d';
-      ctx.fillRect(-5, -1.2, 9, 2.4);
-      ctx.fillStyle = '#4ade80';
-      ctx.fillRect(4, -1, 3, 2);
     } else if (this.weapon.id === 'vortex') {
       // Singularité du Néant (Void Singularity)
       const rot = (Date.now() * 0.008) % (Math.PI * 2);
@@ -466,16 +465,6 @@ export class Projectile {
       ctx.beginPath();
       ctx.arc(x, y, 1.8, 0, Math.PI * 2);
       ctx.fill();
-    } else if (this.weapon.id === 'laser') {
-      // Faisceau Lunaire (Lunar Beam)
-      ctx.strokeStyle = '#f43f5e';
-      ctx.lineWidth = 2.8;
-      ctx.shadowColor = '#fb7185';
-      ctx.shadowBlur = 8;
-      ctx.beginPath();
-      ctx.moveTo(x - this.vx * 0.8, y - this.vy * 0.8);
-      ctx.lineTo(x, y);
-      ctx.stroke();
     } else if (this.weapon.id === 'acid_bomb') {
       // Fiole Alchimique (Alchemical Flask)
       const angle = Math.atan2(this.vy, this.vx);
@@ -528,16 +517,6 @@ export class Projectile {
       ctx.beginPath();
       ctx.arc(0, 0, 2.2, 0, Math.PI * 2);
       ctx.fill();
-    } else if (this.weapon.id === 'sniper') {
-      // Éclair de Jugement (Judgment Bolt)
-      ctx.shadowColor = '#fbbf24';
-      ctx.shadowBlur = 10;
-      ctx.strokeStyle = '#fef08a';
-      ctx.lineWidth = 2.4;
-      ctx.beginPath();
-      ctx.moveTo(x - this.vx * 0.6, y - this.vy * 0.6);
-      ctx.lineTo(x, y);
-      ctx.stroke();
     } else if (this.weapon.id === 'shotgun') {
       // Éclats Arcaniques (Arcane Shards)
       const angle = Math.atan2(this.vy, this.vx);
@@ -561,6 +540,102 @@ export class Projectile {
       ctx.beginPath();
       ctx.arc(x, y, 2.4, 0, Math.PI * 2);
       ctx.fill();
+    } else if (this.weapon.id === 'earth_wall') {
+      // Clod of enchanted earth
+      ctx.translate(x, y);
+      ctx.rotate(this.age * 0.15);
+      ctx.fillStyle = '#7a4a22';
+      ctx.strokeStyle = '#e0a060';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(-4.5, -2); ctx.lineTo(-1, -5); ctx.lineTo(4, -3.5); ctx.lineTo(5, 1.5); ctx.lineTo(1, 5); ctx.lineTo(-4, 3);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    } else if (this.weapon.id === 'leech') {
+      // Blood bolt
+      const angle = Math.atan2(this.vy, this.vx);
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.shadowColor = '#ff1744';
+      ctx.shadowBlur = 8;
+      ctx.fillStyle = '#9b0020';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 6, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ff4d6d';
+      ctx.beginPath();
+      ctx.arc(2.5, 0, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (this.weapon.id === 'teleport') {
+      // Swirling rift orb
+      ctx.translate(x, y);
+      ctx.rotate(this.age * 0.3);
+      ctx.shadowColor = '#b48cff';
+      ctx.shadowBlur = 10;
+      ctx.strokeStyle = '#c9a8ff';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, 5, 0, Math.PI * 1.3);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0, 0, 3, Math.PI, Math.PI * 2.3);
+      ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(0, 0, 1.4, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (this.weapon.id === 'chain_lightning') {
+      // Crackling ball of lightning
+      ctx.shadowColor = '#9fe8ff';
+      ctx.shadowBlur = 12;
+      ctx.strokeStyle = '#e6faff';
+      ctx.lineWidth = 1;
+      for (let k = 0; k < 3; k++) {
+        const a = Math.random() * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + Math.cos(a) * 6, y + Math.sin(a) * 6);
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#bff2ff';
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (this.weapon.id === 'meteor') {
+      if (this.isSubCluster) {
+        // Falling meteor
+        const angle = Math.atan2(this.vy, this.vx);
+        ctx.translate(x, y);
+        ctx.rotate(angle);
+        ctx.shadowColor = '#ff6600';
+        ctx.shadowBlur = 10;
+        ctx.fillStyle = '#ff8a1a';
+        ctx.beginPath();
+        ctx.moveTo(-12, 0);
+        ctx.lineTo(0, -4);
+        ctx.lineTo(0, 4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#4a2511';
+        ctx.beginPath();
+        ctx.arc(0, 0, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        // Target beacon
+        const pulse = 0.5 + 0.5 * Math.sin(this.age * 0.3);
+        ctx.shadowColor = '#ff7a1a';
+        ctx.shadowBlur = 8;
+        ctx.strokeStyle = `rgba(255, 140, 40, ${0.6 + pulse * 0.4})`;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(x, y, 3.5 + pulse * 1.5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = '#ffd08a';
+        ctx.beginPath();
+        ctx.arc(x, y, 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
     } else {
       // Spark générique aux couleurs du sort
       ctx.fillStyle = elemColor;

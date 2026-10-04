@@ -81,7 +81,7 @@ export class ShopUI {
           <div class="txt">
             <b>${sel.name}</b>
             ${sel.description}
-            <div class="stats">${sel.spellSchool} · Dégâts ${sel.damage}${sel.pelletCount ? ` × ${sel.pelletCount}` : ''} · ${sel.clipSize} charge${sel.clipSize > 1 ? 's' : ''}</div>
+            <div class="stats">${sel.spellSchool}${sel.damage > 0 ? ` · Dégâts ${sel.damage}${sel.pelletCount ? ` × ${sel.pelletCount}` : ''}` : ''} · ${sel.clipSize} charge${sel.clipSize > 1 ? 's' : ''}</div>
           </div>
           <button class="btn btn-primary btn-big" id="shop-go">Entrer dans l'arène</button>
         </div>

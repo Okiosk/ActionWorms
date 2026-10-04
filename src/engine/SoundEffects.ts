@@ -416,45 +416,48 @@ export class SoundEffects {
     if (!this.enabled) return;
     this.initCtx();
 
-    // Fire / Meteor / Dragon
-    if (weaponId === 'bazooka' || weaponId === 'mortar' || weaponId === 'flamer') {
-      this.playSpellSample(0, 1.1);
-      this.playBazooka();
-    }
-    // Arcane / Spark / Minigun / Shotgun
-    else if (weaponId === 'minigun' || weaponId === 'shotgun') {
-      this.playSpellSample(1, 0.9);
-      if (weaponId === 'minigun') this.playMinigun();
-      else this.playShotgun();
-    }
-    // Astral / Divine / Railgun / Gauss / Sniper / Laser
-    else if (weaponId === 'gauss' || weaponId === 'railgun' || weaponId === 'sniper' || weaponId === 'laser') {
-      this.playSpellSample(3, 1.2);
-      this.playRailgun();
-    }
-    // Frost / Dart
-    else if (weaponId === 'freeze_bomb' || weaponId === 'dart_gun') {
-      this.playSpellSample(2, 1.0);
-      this.playDart();
-    }
-    // Void / Wisp / Chaos / Acid / Grenade / Mine / Boomerang / Bouncy
-    else if (weaponId === 'vortex' || weaponId === 'homing_missile' || weaponId === 'mine') {
-      this.playSpellSample(4, 1.1);
-      if (weaponId === 'vortex') this.playVortex();
-      else if (weaponId === 'homing_missile') this.playHoming();
-      else this.playGrenadeBounce();
-    }
-    else if (weaponId === 'acid_bomb') {
-      this.playSpellSample(4, 1.0);
-      this.playGrenadeBounce();
-    }
-    else if (weaponId === 'bouncy_ball' || weaponId === 'boomerang') {
-      this.playSpellSample(1, 0.9);
-      this.playBouncy();
-    }
-    else {
-      this.playSpellSample(1, 0.8);
-      this.playGrenadeBounce();
+    switch (weaponId) {
+      case 'bazooka':
+      case 'flamer':
+      case 'meteor':
+        this.playSpellSample(0, 1.1);
+        this.playBazooka();
+        break;
+      case 'minigun':
+        this.playSpellSample(1, 0.9);
+        this.playMinigun();
+        break;
+      case 'shotgun':
+        this.playSpellSample(1, 0.9);
+        this.playShotgun();
+        break;
+      case 'railgun':
+      case 'chain_lightning':
+        this.playSpellSample(3, 1.2);
+        this.playRailgun();
+        break;
+      case 'freeze_bomb':
+      case 'leech':
+      case 'shield':
+        this.playSpellSample(2, 1.0);
+        this.playDart();
+        break;
+      case 'vortex':
+      case 'teleport':
+        this.playSpellSample(4, 1.1);
+        this.playVortex();
+        break;
+      case 'homing_missile':
+        this.playSpellSample(4, 1.1);
+        this.playHoming();
+        break;
+      case 'boomerang':
+        this.playSpellSample(1, 0.9);
+        this.playBouncy();
+        break;
+      default: // grenade, chiquita, mine, acid_bomb, earth_wall
+        this.playSpellSample(4, 1.0);
+        this.playGrenadeBounce();
     }
   }
 }

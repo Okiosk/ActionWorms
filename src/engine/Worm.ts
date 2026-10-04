@@ -58,6 +58,9 @@ export class Worm {
   public money: number = MONEY_START;
   public grounded: boolean = false;
   public freezeTimer: number = 0;
+  public shieldTimer: number = 0;     // Égide Miroir: reflects enemy spells
+  public burnTimer: number = 0;       // Souffle du Dragon: damage over time
+  public burnBy: string = '';         // who set us on fire (kill credit)
   /** Dead and choosing a spell in the grimoire — do not respawn automatically */
   public waitingForShop: boolean = true;
   private regenAccum: number = 0;
@@ -102,6 +105,8 @@ export class Worm {
     this.vy = 0;
     this.health = this.maxHealth;
     this.freezeTimer = 0;
+    this.shieldTimer = 0;
+    this.burnTimer = 0;
     this.waitingForShop = false;
     this.rope.release();
     this.resetAmmo();
@@ -546,6 +551,23 @@ export class Worm {
     ctx.beginPath();
     ctx.arc(handX, handY, 1.8, 0, Math.PI * 2);
     ctx.fill();
+
+    // Mirror shield bubble
+    if (this.shieldTimer > 0) {
+      const fading = this.shieldTimer < 40 && Math.floor(this.shieldTimer / 5) % 2 === 0;
+      ctx.save();
+      ctx.globalAlpha = fading ? 0.25 : 0.6;
+      ctx.strokeStyle = '#a8e6ff';
+      ctx.shadowColor = '#7fd4ff';
+      ctx.shadowBlur = 10;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(0, -3, 13 + Math.sin(this.animTimer * 0.2) * 0.6, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(127, 212, 255, 0.12)';
+      ctx.fill();
+      ctx.restore();
+    }
 
     // Aiming rune (only for the local player — the mouse already shows where others aim)
     if (isLocal) {
