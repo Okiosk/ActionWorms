@@ -1,44 +1,45 @@
 import { WeaponId } from '../weapons/WeaponDef';
 import { WormInput } from '../engine/Worm';
 import { RopeState } from '../engine/NinjaRope';
+import { MapType } from '../engine/Terrain';
 
+export type { MapType };
 export type GameMode = 'ffa' | 'teams' | 'koth';
-export type MapType = 'cave' | 'volcano' | 'swiss' | 'fortress' | 'open';
 
 export interface MatchModifiers {
-  // Existing
-  gravity: number;          // 1.0 = normal, 0.35 = lunar, 1.8 = heavy, 0.0 = zero-g
+  gameMode: GameMode;
+  mapType: MapType;
+  mapSeed: number;          // the lobby preview and the match use the same seed
+  fragLimit: number;        // frags (FFA), team kills (Teams) or ×12 s in the zone (KOTH)
+  teams: Record<string, number>; // playerId -> team index (0 = rouge, 1 = bleu)
+  gravity: number;          // 1.0 normal, 0.35 lunar, 1.8 heavy, 0 zero-g
   ropeReach: 'normal' | 'infinite';
-  wormSpeed: number;        // 1.0 = normal, 1.5 = turbo, 0.75 = tactical
-  maxHealth: number;        // 100 = standard, 50 = hardcore, 200 = titan
+  wormSpeed: number;        // 1.0 normal, 1.5 turbo, 0.75 tactical
+  maxHealth: number;        // 100, 50, 200
   unlimitedAmmo: boolean;
-  fragLimit: number;        // frags or KOTH score to win
-  // New — gameplay
-  gameMode: GameMode;       // 'ffa' | 'teams' | 'koth'
-  mapType: MapType;         // which map generator to use
-  teams: Record<string, number>; // playerId -> team index (0=red, 1=blue)
-  damageScale: number;      // 0.5, 1.0, 2.0, 3.0
-  regenRate: number;        // 0, 1, 3 HP per second (applied per 60 ticks)
-  explosionScale: number;   // 0.5, 1.0, 2.0 — multiplies crater radius
-  noSelfDamage: boolean;    // own projectiles can't hurt yourself
-  acidEnabled: boolean;     // acid pools spawned in map
+  damageScale: number;      // 0.5, 1, 2, 3
+  regenRate: number;        // HP per second
+  explosionScale: number;   // multiplies crater & blast radius
+  noSelfDamage: boolean;
+  acidEnabled: boolean;
 }
 
 export const DEFAULT_MODIFIERS: MatchModifiers = {
+  gameMode: 'ffa',
+  mapType: 'cave',
+  mapSeed: 123456,
+  fragLimit: 10,
+  teams: {},
   gravity: 1.0,
   ropeReach: 'normal',
   wormSpeed: 1.0,
   maxHealth: 100,
   unlimitedAmmo: false,
-  fragLimit: 10,
-  gameMode: 'ffa',
-  mapType: 'cave',
-  teams: {},
   damageScale: 1.0,
   regenRate: 0,
   explosionScale: 1.0,
   noSelfDamage: false,
-  acidEnabled: true,
+  acidEnabled: true
 };
 
 export interface LobbyPlayerInfo {
@@ -46,101 +47,63 @@ export interface LobbyPlayerInfo {
   name: string;
   color: string;
   isHost: boolean;
-  loadout: WeaponId[];
 }
 
 export interface WormNetState {
   id: string;
-  name: string;
-  color: string;
   x: number;
   y: number;
   vx: number;
   vy: number;
-  health: number;
+  hp: number;
   frags: number;
   deaths: number;
-  facing: number;
-  aimAngle: number;
-  weaponIndex: number;
-  currentWeaponId?: WeaponId;
-  ropeState: RopeState;
-  hookX: number;
-  hookY: number;
-  // team score synced via modifiers, not per-worm
+  score: number;
+  money: number;
+  aim: number;
+  weapon: WeaponId;
+  frozen: number;
+  rope: RopeState;
+  hx: number;
+  hy: number;
+  rl: number;   // rope length
+  ack: number;  // last input sequence number processed for this player
 }
 
 export interface ProjectileNetState {
   id: number;
-  weaponId: WeaponId;
+  w: WeaponId;
   x: number;
   y: number;
   vx: number;
   vy: number;
+  sub?: 1;
+  armed?: 1;
 }
 
 export type NetEvent =
-  | { type: 'crater'; x: number; y: number; r: number }
-  | { type: 'blood'; x: number; y: number; count: number }
-  | { type: 'sound'; name: string }
-  | { type: 'kill'; killerId: string; victimId: string };
+  | { t: 'crater'; x: number; y: number; r: number }
+  | { t: 'line'; x0: number; y0: number; x1: number; y1: number; r: number }
+  | { t: 'boom'; x: number; y: number; r: number; c?: string }
+  | { t: 'acid'; x: number; y: number; r: number }
+  | { t: 'blood'; x: number; y: number; n: number }
+  | { t: 'shot'; id: string; w: WeaponId }
+  | { t: 'kill'; killer: string | null; victim: string; cause?: 'acid' | 'self' };
 
 export type NetMessage =
-  | {
-      type: 'JOIN';
-      name: string;
-      loadout: WeaponId[];
-    }
-  | {
-      type: 'WELCOME';
-      playerId: string;
-      mapSeed: number;
-      mapWidth: number;
-      mapHeight: number;
-      modifiers: MatchModifiers;
-      players: LobbyPlayerInfo[];
-    }
-  | {
-      type: 'LOBBY_UPDATE';
-      players: LobbyPlayerInfo[];
-      modifiers: MatchModifiers;
-    }
-  | {
-      type: 'SET_MODIFIERS';
-      modifiers: MatchModifiers;
-    }
+  | { type: 'JOIN'; name: string }
+  | { type: 'WELCOME'; playerId: string; players: LobbyPlayerInfo[]; modifiers: MatchModifiers }
+  | { type: 'LOBBY_UPDATE'; players: LobbyPlayerInfo[]; modifiers: MatchModifiers }
   | {
       type: 'START_MATCH';
-      mapSeed: number;
-      modifiers: MatchModifiers;
       players: LobbyPlayerInfo[];
+      modifiers: MatchModifiers;
+      terrain?: Uint8Array; // RLE snapshot, only sent to players joining a match in progress
     }
-  | {
-      type: 'SELECT_WEAPON_RESPAWN';
-      weaponId: WeaponId;
-    }
-  | {
-      type: 'INPUT';
-      seq: number;
-      input: WormInput;
-    }
-  | {
-      type: 'STATE';
-      seq: number;
-      worms: WormNetState[];
-      projectiles: ProjectileNetState[];
-      events: NetEvent[];
-      kothScores?: number[]; // [team0score, team1score] or [p0score, p1score, ...] for FFA koth
-    }
-  | {
-      type: 'MATCH_OVER';
-      winnerId: string;
-    }
-  | {
-      type: 'PING';
-      time: number;
-    }
-  | {
-      type: 'PONG';
-      time: number;
-    };
+  | { type: 'SELECT_WEAPON'; weaponId: WeaponId }
+  | { type: 'INPUT'; seq: number; input: WormInput }
+  | { type: 'STATE'; worms: WormNetState[]; projectiles: ProjectileNetState[]; events: NetEvent[]; teamScores: number[] }
+  | { type: 'MATCH_OVER'; winnerId: string; winnerTeam: number }
+  | { type: 'RETURN_TO_LOBBY' }
+  | { type: 'PING'; time: number }
+  | { type: 'PONG'; time: number };

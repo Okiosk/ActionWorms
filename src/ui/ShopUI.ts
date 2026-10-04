@@ -1,135 +1,115 @@
-/**
- * ShopUI — Écran de Grimoire Magique & Sanctuaire des Sorts.
- *
- * Affiché avant le premier spawn et entre chaque réincarnation.
- * Le joueur peut prendre tout son temps pour choisir son sort.
- * Le respawn se déclenche uniquement en confirmant l'incantation.
- */
-
-import { WEAPON_REGISTRY, ALL_WEAPON_IDS, MONEY_KILL, MONEY_DEATH } from '../weapons/WeaponRegistry';
+import { WEAPON_REGISTRY, ALL_WEAPON_IDS, DEFAULT_WEAPON, MONEY_KILL, MONEY_DEATH } from '../weapons/WeaponRegistry';
 import { WeaponId } from '../weapons/WeaponDef';
 import { Worm } from '../engine/Worm';
 
-type OnBuyCallback = (weaponId: WeaponId) => void;
+const SPELLS = [...ALL_WEAPON_IDS].sort((a, b) => WEAPON_REGISTRY[a].price - WEAPON_REGISTRY[b].price);
 
+/**
+ * Grimoire: pick a spell before each (re)spawn. The last spell is pre-selected,
+ * so respawning is a single click / Enter.
+ */
 export class ShopUI {
   private el: HTMLElement;
   private worm: Worm | null = null;
-  private selectedId: WeaponId | null = null;
-  private onBuy: OnBuyCallback | null = null;
-  private visible: boolean = false;
+  private selected: WeaponId = DEFAULT_WEAPON;
+  private lastChoice: WeaponId = DEFAULT_WEAPON;
+  private onChoose: ((id: WeaponId) => void) | null = null;
+  private visible = false;
 
   constructor(container: HTMLElement) {
     this.el = document.createElement('div');
     this.el.id = 'shop-overlay';
-    this.el.style.display = 'none';
     container.appendChild(this.el);
+
+    window.addEventListener('keydown', (e) => {
+      if (!this.visible || e.repeat) return;
+      if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+        e.preventDefault();
+        this.confirm();
+      }
+    });
   }
 
-  /** Affiche le Grimoire pour le sorcier. Pas de compte à rebours. */
-  public show(worm: Worm, onBuy: OnBuyCallback) {
+  public show(worm: Worm, onChoose: (id: WeaponId) => void) {
     this.worm = worm;
-    this.onBuy = onBuy;
-    this.selectedId = null;
+    this.onChoose = onChoose;
+    this.selected = this.canAfford(this.lastChoice) ? this.lastChoice : DEFAULT_WEAPON;
     this.visible = true;
-    this.el.style.display = 'flex';
+    this.el.classList.add('open');
     this.render();
   }
 
-  /** Cache le Grimoire. */
   public hide() {
     this.visible = false;
-    this.el.style.display = 'none';
+    this.el.classList.remove('open');
     this.worm = null;
   }
 
-  public isVisible() { return this.visible; }
-
-  public tick() {
-    // Pas de compte à rebours automatique
+  public isVisible() {
+    return this.visible;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Rendering
-  // ─────────────────────────────────────────────────────────────────────────
+  private canAfford(id: WeaponId): boolean {
+    return !!this.worm && this.worm.money >= WEAPON_REGISTRY[id].price;
+  }
 
   private render() {
     if (!this.worm) return;
-    const w = this.worm;
-
-    const rows = ALL_WEAPON_IDS.map(id => {
-      const def = WEAPON_REGISTRY[id];
-      const canAfford = w.money >= def.price;
-      const isFree = def.price === 0;
-      const isSelected = id === this.selectedId;
-      const elemColor = def.elementColor || '#ffd700';
-
-      return `
-        <div class="shop-row${isSelected ? ' selected' : ''}${canAfford ? '' : ' cant-afford'}"
-             data-id="${id}" style="${isSelected ? `border-color: ${elemColor}; box-shadow: 0 0 10px ${elemColor}44;` : ''}">
-          <span class="shop-icon">${def.icon}</span>
-          <div class="shop-info">
-            <div class="shop-name-row">
-              <span class="shop-name">${def.name}</span>
-              ${def.spellSchool ? `<span class="spell-school-tag" style="color: ${elemColor}; border-color: ${elemColor}66;">${def.spellSchool}</span>` : ''}
-            </div>
-            <span class="shop-desc">${def.description}</span>
-          </div>
-          <span class="shop-price ${isFree ? 'free' : canAfford ? 'ok' : 'expensive'}">
-            ${isFree ? '✨ INNÉ' : `✨ ${def.price}`}
-          </span>
-        </div>`;
-    }).join('');
+    const money = this.worm.money;
+    const sel = WEAPON_REGISTRY[this.selected];
 
     this.el.innerHTML = `
-      <div class="shop-panel">
-        <div class="shop-header">
-          <div class="shop-title">🧙‍♂️ GRIMOIRE ARCANIQUE — SANCTUAIRE DES SORTS</div>
-          <div class="shop-balance">✨ Réserve de Mana : <b>${w.money}</b></div>
-          <div class="shop-hint">Sorcier terrassé +${MONEY_KILL} ✨ · Réincarnation +${MONEY_DEATH} ✨</div>
+      <div class="shop">
+        <div class="shop-head">
+          <h2>Choisis ton sort</h2>
+          <span class="money">✨ ${money} or</span>
         </div>
-        <div class="shop-list" id="shop-list">${rows}</div>
-        <div class="shop-footer">
-          <button class="shop-btn" id="shop-confirm" ${this.selectedId ? '' : 'disabled'}>
-            ${this.selectedId
-              ? `${WEAPON_REGISTRY[this.selectedId].icon} Invoquer "${WEAPON_REGISTRY[this.selectedId].name}" → Entrer dans l'Arène !`
-              : 'Sélectionnez un sort à imprégner dans votre bâton'}
-          </button>
+        <div class="spell-grid">
+          ${SPELLS.map(id => {
+            const d = WEAPON_REGISTRY[id];
+            const cls = [id === this.selected ? 'selected' : '', money < d.price ? 'locked' : ''].join(' ');
+            return `
+              <button class="spell ${cls}" data-id="${id}" style="--spell-color:${d.elementColor}">
+                <span class="icon">${d.icon}</span>
+                <span class="sname">${d.name}</span>
+                <span class="price ${d.price === 0 ? 'free' : ''}">${d.price === 0 ? 'Gratuit' : `${d.price} or`}</span>
+              </button>`;
+          }).join('')}
         </div>
+        <div class="spell-detail">
+          <span class="icon">${sel.icon}</span>
+          <div class="txt">
+            <b>${sel.name}</b>
+            ${sel.description}
+            <div class="stats">${sel.spellSchool} · Dégâts ${sel.damage}${sel.pelletCount ? ` × ${sel.pelletCount}` : ''} · ${sel.clipSize} charge${sel.clipSize > 1 ? 's' : ''}</div>
+          </div>
+          <button class="btn btn-primary btn-big" id="shop-go">Entrer dans l'arène</button>
+        </div>
+        <div class="hint">Double-clic ou <kbd>Entrée</kbd> pour valider · +${MONEY_KILL} or par sorcier vaincu, +${MONEY_DEATH} or par mort</div>
       </div>`;
 
-    // Events
-    this.el.querySelectorAll('.shop-row').forEach(row => {
-      row.addEventListener('click', () => {
-        const id = (row as HTMLElement).dataset.id as WeaponId;
-        const def = WEAPON_REGISTRY[id];
-        if (w.money >= def.price) {
-          this.selectedId = id;
-          this.render();
-        }
+    this.el.querySelectorAll<HTMLElement>('.spell').forEach(btn => {
+      const id = btn.dataset.id as WeaponId;
+      btn.addEventListener('click', () => {
+        if (!this.canAfford(id)) return;
+        this.selected = id;
+        this.render();
+      });
+      btn.addEventListener('dblclick', () => {
+        if (!this.canAfford(id)) return;
+        this.selected = id;
+        this.confirm();
       });
     });
-
-    const confirmBtn = this.el.querySelector('#shop-confirm') as HTMLButtonElement;
-    confirmBtn?.addEventListener('click', () => {
-      if (this.selectedId) this._confirmPurchase(this.selectedId);
-    });
+    this.el.querySelector('#shop-go')?.addEventListener('click', () => this.confirm());
   }
 
-  private _confirmPurchase(id: WeaponId) {
-    if (!this.worm || !this.onBuy) return;
-    const def = WEAPON_REGISTRY[id];
-    // Déduire le mana
-    if (def.price > 0) {
-      if (this.worm.money < def.price) {
-        // Fallback sort gratuit (bazooka = Boule de Feu)
-        this.onBuy('bazooka');
-        this.hide();
-        return;
-      }
-      this.worm.money -= def.price;
-    }
-    this.onBuy(id);
+  private confirm() {
+    if (!this.worm || !this.onChoose) return;
+    const id = this.canAfford(this.selected) ? this.selected : DEFAULT_WEAPON;
+    this.lastChoice = id;
+    const cb = this.onChoose;
     this.hide();
+    cb(id);
   }
 }

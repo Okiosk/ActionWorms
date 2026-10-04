@@ -1,10 +1,11 @@
 import { CONFIG } from '../config';
 import { Terrain } from './Terrain';
-import { Worm, WormInput } from './Worm';
-import { Projectile } from './Projectile';
+import { Worm, WormInput, EMPTY_INPUT, WormFx } from './Worm';
+import { Projectile, ProjectileWorld } from './Projectile';
 import { ParticleManager } from './Particles';
+import { sound } from './SoundEffects';
 import { WeaponDef, WeaponId } from '../weapons/WeaponDef';
-import { WEAPON_REGISTRY, DEFAULT_LOADOUT, FREE_WEAPONS, MONEY_KILL, MONEY_DEATH } from '../weapons/WeaponRegistry';
+import { WEAPON_REGISTRY, DEFAULT_WEAPON, MONEY_KILL, MONEY_DEATH } from '../weapons/WeaponRegistry';
 import { NetworkManager } from '../net/NetworkManager';
 import {
   NetEvent,
@@ -15,1009 +16,1079 @@ import {
   DEFAULT_MODIFIERS,
   LobbyPlayerInfo
 } from '../net/Protocol';
-import { sound } from './SoundEffects';
 
-export type GameMode = 'online_host' | 'online_client';
+export type Role = 'host' | 'client';
+export type Phase = 'menu' | 'lobby' | 'playing' | 'over';
 
-export class Game {
+export interface MatchResult {
+  winnerName: string;
+  winnerTeam: number; // -1 when not a team game
+  isLocalWinner: boolean;
+  standings: Worm[];
+}
+
+type StateMessage = Extract<NetMessage, { type: 'STATE' }>;
+
+const HOST_TIMEOUT_MS = 8000;
+const randomSeed = () => Math.floor(Math.random() * 1_000_000) + 1;
+
+/**
+ * Game simulation. The host is authoritative: it simulates everything and broadcasts
+ * the world state 60×/s. Clients predict their own wizard (with input replay on each
+ * host update) and render everything else from the host state.
+ */
+export class Game implements ProjectileWorld {
   public canvas: HTMLCanvasElement;
-  public ctx: CanvasRenderingContext2D;
-  public terrain: Terrain;
-  public particles: ParticleManager;
+  private ctx: CanvasRenderingContext2D;
+  public terrain = new Terrain();
+  public particles = new ParticleManager();
   public worms: Worm[] = [];
   public projectiles: Projectile[] = [];
-  public nextProjectileId: number = 1;
+  private nextProjectileId = 1;
 
-  public mode: GameMode = 'online_host';
+  public role: Role = 'host';
+  public phase: Phase = 'menu';
   public net: NetworkManager;
-  public mapSeed: number = 123456;
-  public fragLimit: number = CONFIG.DEFAULT_FRAG_LIMIT;
   public modifiers: MatchModifiers = { ...DEFAULT_MODIFIERS };
-  public matchWinner: Worm | null = null;
-  public isRunning: boolean = false;
+  public players: LobbyPlayerInfo[] = [];
+  public teamScores: number[] = [0, 0];
+  public result: MatchResult | null = null;
 
-  // Lobby tracking for up to 8 players
-  public lobbyPlayers: Map<string, LobbyPlayerInfo> = new Map();
+  // Inputs
+  public localInput: WormInput = { ...EMPTY_INPUT };
+  private remoteInputs = new Map<string, { queue: { seq: number; input: WormInput }[]; last: WormInput; ack: number }>();
+  private inputSeq = 0;
+  private inputHistory: { seq: number; input: WormInput }[] = [];
+  private pendingStates: StateMessage[] = [];
 
-  // Screen shake
-  public shakeDuration: number = 0;
-  public shakeIntensity: number = 0;
+  // Host → clients event queue
+  private pendingEvents: NetEvent[] = [];
+  private acidTick = 0;
 
-  // KOTH scores [team0/p0, team1/p1, ...]
-  public kothScores: number[] = [0, 0];
-  public kothZoneHolder: number = -1; // -1 = contested, 0..1 = team index, or worm index in FFA
-  private renderFrameTime: number = 0; // for acid animation
-  private acidTickAccum: number = 0;   // for periodic acid damage
+  // Rendering
+  private lastTickTime = 0;
+  private lastRenderTime = 0;
+  private frame = 0;
+  private shakeTime = 0;
+  private shakeIntensity = 0;
+  public camX = CONFIG.MAP_WIDTH / 2;
+  public camY = CONFIG.MAP_HEIGHT / 2;
+  public camZoom = 3.5;
+  private camFollowing = false;
 
-  // Smooth camera following local player
-  public camX: number = 0;
-  public camY: number = 0;
-  public readonly camZoom: number = 3.5; // zoom multiplier
-
-  // Local inputs
-  public localP1Input: WormInput = { left: false, right: false, up: false, down: false, jump: false, fire: false, rope: false };
-  public remoteInputs: Map<string, WormInput> = new Map();
-
-  // Network event queue (for Host to send to clients)
-  private pendingNetEvents: NetEvent[] = [];
-  private netSeq: number = 0;
-
-  // Callbacks for UI updates
-  public onMatchEnd?: (winner: Worm) => void;
-  public onKillFeed?: (killer: string, victim: string) => void;
-  public onWelcomeReceived?: () => void;
-  public onLobbyUpdate?: (players: LobbyPlayerInfo[], modifiers: MatchModifiers) => void;
-  public onStartMatchReceived?: (modifiers: MatchModifiers) => void;
-  /** Called when the LOCAL worm dies — triggers shop UI in main.ts */
-  public onLocalWormDied?: (worm: Worm, respawnFrames: number) => void;
-  /** Called by ShopUI when player confirms weapon purchase — applied before respawn */
-  public pendingBoughtWeapon: WeaponId | null = null;
+  // UI callbacks
+  public onLobbyUpdate?: () => void;
+  public onWelcome?: () => void;
+  public onMatchStart?: () => void;
+  public onMatchOver?: (result: MatchResult) => void;
+  public onReturnToLobby?: () => void;
+  public onKill?: (killer: string | null, victim: string, cause?: 'acid' | 'self') => void;
+  /** The local wizard died (or the match starts): open the grimoire */
+  public onLocalDeath?: (worm: Worm) => void;
+  /** The connection to the host was lost */
+  public onDisconnected?: () => void;
 
   constructor(canvas: HTMLCanvasElement, net: NetworkManager) {
     this.canvas = canvas;
-    // Canvas fills the screen; the camera transform handles world-space rendering
+    this.ctx = canvas.getContext('2d')!;
+    this.net = net;
     this.resizeCanvas();
     window.addEventListener('resize', () => this.resizeCanvas());
-    this.ctx = canvas.getContext('2d')!;
-
-    // Initialize camera to center of map
-    this.camX = CONFIG.MAP_WIDTH / 2;
-    this.camY = CONFIG.MAP_HEIGHT / 2;
-
-    this.terrain = new Terrain();
-    this.terrain.onCarve = (cx, cy, r) => {
-      if (this.mode === 'online_host') {
-        this.pendingNetEvents.push({
-          type: 'crater',
-          x: Math.round(cx),
-          y: Math.round(cy),
-          r: Math.round(r)
-        });
-      }
-    };
-    this.particles = new ParticleManager();
-    this.net = net;
-
     this.setupNetworkCallbacks();
   }
-  public resizeCanvas() {
-    this.canvas.width = window.innerWidth;
-    this.canvas.height = window.innerHeight;
-  }
 
-  /**
-   * Convert screen pixel coordinates (e.g. mouse) to world coordinates,
-   * accounting for the current camera transform (zoom + pan).
-   */
-  public screenToWorld(screenX: number, screenY: number): { x: number; y: number } {
-    const w = this.canvas.width;
-    const h = this.canvas.height;
-    return {
-      x: (screenX - w / 2) / this.camZoom + this.camX,
-      y: (screenY - h / 2) / this.camZoom + this.camY
-    };
-  }
+  // ════════════════════════════════════════════════════════════════════════
+  // Accessors
+  // ════════════════════════════════════════════════════════════════════════
 
-  /** Smooth-follow the local player. Call once per render frame (not physics tick). */
-  public updateCamera(alpha: number = 0.10) {
-    const target = this.getLocalWorm();
-    if (!target || !target.isAlive()) return;
-    this.camX += (target.x - this.camX) * alpha;
-    this.camY += (target.y - this.camY) * alpha;
-    // Clamp so the camera never shows outside the map
-    const halfW = this.canvas.width / (2 * this.camZoom);
-    const halfH = this.canvas.height / (2 * this.camZoom);
-    this.camX = Math.max(halfW, Math.min(CONFIG.MAP_WIDTH - halfW, this.camX));
-    this.camY = Math.max(halfH, Math.min(CONFIG.MAP_HEIGHT - halfH, this.camY));
-  }
-
-  /** Convert world coordinates to screen pixel position. */
-  public worldToScreen(worldX: number, worldY: number): { x: number; y: number } {
-    const cw = this.canvas.width;
-    const ch = this.canvas.height;
-    return {
-      x: (worldX - this.camX) * this.camZoom + cw / 2,
-      y: (worldY - this.camY) * this.camZoom + ch / 2
-    };
-  }
-
-  /**
-   * Draw off-screen indicators (arrows on screen edge) for every remote worm
-   * that is alive but not currently visible inside the camera viewport.
-   * Called AFTER ctx.restore() so it draws in pure screen space.
-   */
-  private drawOffScreenIndicators() {
-    const ctx = this.ctx;
-    const cw = this.canvas.width;
-    const ch = this.canvas.height;
-    const localWorm = this.getLocalWorm();
-    const margin = 30; // distance from screen edge
-    const arrowSize = 14;
-
-    for (const worm of this.worms) {
-      if (!worm.isAlive()) continue;
-      if (worm === localWorm) continue;
-
-      const { x: sx, y: sy } = this.worldToScreen(worm.x, worm.y);
-
-      // Is the worm already visible on screen? (with a generous worm-body margin)
-      const bodyR = worm.radius * this.camZoom + 4;
-      if (sx >= bodyR && sx <= cw - bodyR && sy >= bodyR && sy <= ch - bodyR) continue;
-
-      // Direction from screen center to the off-screen worm
-      const dx = sx - cw / 2;
-      const dy = sy - ch / 2;
-      const angle = Math.atan2(dy, dx);
-
-      // Find clamped position on screen edge
-      const cos = Math.cos(angle);
-      const sin = Math.sin(angle);
-      // Intersect ray from center with screen rectangle (shrunk by margin)
-      const hw = cw / 2 - margin;
-      const hh = ch / 2 - margin;
-      let t = Infinity;
-      if (Math.abs(cos) > 0.0001) t = Math.min(t, Math.abs(hw / cos));
-      if (Math.abs(sin) > 0.0001) t = Math.min(t, Math.abs(hh / sin));
-      const edgeX = cw / 2 + cos * t;
-      const edgeY = ch / 2 + sin * t;
-
-      // Distance in world units (for display)
-      const worldDist = Math.round(Math.hypot(worm.x - (localWorm?.x ?? this.camX), worm.y - (localWorm?.y ?? this.camY)));
-
-      ctx.save();
-      ctx.translate(edgeX, edgeY);
-      ctx.rotate(angle);
-
-      // Arrow body (filled triangle pointing toward worm)
-      ctx.beginPath();
-      ctx.moveTo(arrowSize, 0);
-      ctx.lineTo(-arrowSize * 0.6, -arrowSize * 0.55);
-      ctx.lineTo(-arrowSize * 0.6, arrowSize * 0.55);
-      ctx.closePath();
-      ctx.fillStyle = worm.color;
-      ctx.globalAlpha = 0.92;
-      ctx.fill();
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-
-      // Colored dot (pulse)
-      ctx.globalAlpha = 1.0;
-      ctx.beginPath();
-      ctx.arc(-arrowSize * 0.6, 0, 4, 0, Math.PI * 2);
-      ctx.fillStyle = worm.color;
-      ctx.fill();
-
-      ctx.restore();
-
-      // Player name + distance label next to the arrow
-      ctx.save();
-      const labelOffset = arrowSize + 6;
-      const lx = edgeX + Math.cos(angle) * labelOffset;
-      const ly = edgeY + Math.sin(angle) * labelOffset;
-
-      // Keep label inside screen
-      const clampedLx = Math.max(60, Math.min(cw - 60, lx));
-      const clampedLy = Math.max(16, Math.min(ch - 8, ly));
-
-      ctx.font = 'bold 11px VT323, monospace';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-
-      // Shadow
-      ctx.fillStyle = '#000000';
-      ctx.globalAlpha = 0.7;
-      ctx.fillText(`${worm.name}  ${worldDist}px`, clampedLx + 1, clampedLy + 1);
-
-      // Text
-      ctx.fillStyle = worm.color;
-      ctx.globalAlpha = 1.0;
-      ctx.fillText(`${worm.name}  ${worldDist}px`, clampedLx, clampedLy);
-
-      ctx.restore();
-    }
+  public get localId(): string {
+    return this.net.myPeerId;
   }
 
   public getLocalWorm(): Worm | undefined {
-    if (this.mode === 'online_client') {
-      return this.worms.find(w => w.id === this.net.myPeerId) || this.worms[0];
-    }
-    return this.worms.find(w => w.id === this.net.myPeerId) || this.worms[0];
+    return this.worms.find(w => w.id === this.localId);
   }
 
-  public getLobbyPlayers(): LobbyPlayerInfo[] {
-    return Array.from(this.lobbyPlayers.values());
+  public isInMatch(): boolean {
+    return this.phase === 'playing' || this.phase === 'over';
   }
 
-  public setModifiers(newMods: Partial<MatchModifiers>) {
-    this.modifiers = { ...this.modifiers, ...newMods };
-    this.fragLimit = this.modifiers.fragLimit;
-    for (const w of this.worms) {
-      w.applyModifiers(this.modifiers);
+  public teamOf(id: string): number {
+    return this.modifiers.teams[id] ?? 0;
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Lobby (host)
+  // ════════════════════════════════════════════════════════════════════════
+
+  public openHostLobby(name: string) {
+    this.role = 'host';
+    this.phase = 'lobby';
+    this.modifiers = { ...DEFAULT_MODIFIERS, teams: {}, mapSeed: randomSeed() };
+    this.players = [{ id: this.localId, name, color: CONFIG.PLAYER_COLORS[0], isHost: true }];
+    this.worms = [];
+    this.remoteInputs.clear();
+    this.emitLobby();
+  }
+
+  public prepareClient() {
+    this.role = 'client';
+    this.phase = 'lobby';
+    this.players = [];
+    this.worms = [];
+    this.pendingStates = [];
+  }
+
+  public setModifiers(partial: Partial<MatchModifiers>) {
+    if (this.role !== 'host') return;
+    this.modifiers = { ...this.modifiers, ...partial };
+    if (this.modifiers.gameMode === 'teams') this.assignMissingTeams();
+    this.emitLobby();
+  }
+
+  public newMapSeed() {
+    this.setModifiers({ mapSeed: randomSeed() });
+  }
+
+  public toggleTeam(playerId: string) {
+    const teams = { ...this.modifiers.teams, [playerId]: this.teamOf(playerId) === 0 ? 1 : 0 };
+    this.setModifiers({ teams });
+  }
+
+  private assignMissingTeams() {
+    const teams = { ...this.modifiers.teams };
+    for (const p of this.players) {
+      if (teams[p.id] === undefined) {
+        const red = this.players.filter(q => teams[q.id] === 0).length;
+        const blue = this.players.filter(q => teams[q.id] === 1).length;
+        teams[p.id] = red <= blue ? 0 : 1;
+      }
     }
-    if (this.mode === 'online_host') {
-      this.broadcastLobbyUpdate();
+    this.modifiers.teams = teams;
+  }
+
+  private emitLobby() {
+    if (this.role === 'host') {
+      this.net.broadcast({ type: 'LOBBY_UPDATE', players: this.players, modifiers: this.modifiers });
+    }
+    this.onLobbyUpdate?.();
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Match flow
+  // ════════════════════════════════════════════════════════════════════════
+
+  public startMatch() {
+    if (this.role !== 'host') return;
+    if (this.modifiers.gameMode === 'teams') this.assignMissingTeams();
+    this.setupMatch();
+    this.worms = this.players.map(p => this.createWorm(p));
+    this.net.broadcast({ type: 'START_MATCH', players: this.players, modifiers: this.modifiers });
+    this.onMatchStart?.();
+    this.openLocalShop();
+  }
+
+  public rematch() {
+    if (this.role !== 'host') return;
+    this.modifiers.mapSeed = randomSeed();
+    this.startMatch();
+  }
+
+  public returnToLobby() {
+    if (this.role !== 'host') return;
+    this.phase = 'lobby';
+    this.worms = [];
+    this.projectiles = [];
+    this.modifiers.mapSeed = randomSeed();
+    this.net.broadcast({ type: 'RETURN_TO_LOBBY' });
+    this.emitLobby();
+    this.onReturnToLobby?.();
+  }
+
+  public leave() {
+    this.phase = 'menu';
+    this.worms = [];
+    this.projectiles = [];
+    this.players = [];
+    this.net.close();
+  }
+
+  private setupMatch() {
+    const m = this.modifiers;
+    this.terrain.generateMap(m.mapSeed, m.mapType, m.acidEnabled, m.gameMode === 'koth' ? CONFIG.KOTH_ZONE_RADIUS : 0);
+    this.particles.clear();
+    this.projectiles = [];
+    this.pendingEvents = [];
+    this.pendingStates = [];
+    this.inputHistory = [];
+    this.remoteInputs.clear();
+    this.teamScores = [0, 0];
+    this.result = null;
+    this.camFollowing = false;
+    this.camX = CONFIG.MAP_WIDTH / 2;
+    this.camY = CONFIG.MAP_HEIGHT / 2;
+    this.phase = 'playing';
+  }
+
+  private createWorm(p: LobbyPlayerInfo): Worm {
+    const w = new Worm(p.id, p.name, p.color);
+    w.applyModifiers(this.modifiers);
+    return w;
+  }
+
+  private openLocalShop() {
+    const local = this.getLocalWorm();
+    if (local) this.onLocalDeath?.(local);
+  }
+
+  /** The local player confirmed a spell in the grimoire. */
+  public chooseWeapon(weaponId: WeaponId) {
+    if (this.role === 'host') {
+      this.applyWeaponChoice(this.localId, weaponId);
+    } else {
+      this.net.broadcast({ type: 'SELECT_WEAPON', weaponId });
     }
   }
 
-  public broadcastLobbyUpdate() {
-    if (this.mode !== 'online_host') return;
-    const players = this.getLobbyPlayers();
-    this.net.broadcast({
-      type: 'LOBBY_UPDATE',
-      players,
-      modifiers: this.modifiers
-    });
-    this.onLobbyUpdate?.(players, this.modifiers);
+  /** Host: pay for the spell (if affordable) and respawn the wizard. */
+  private applyWeaponChoice(wormId: string, weaponId: WeaponId) {
+    const w = this.worms.find(worm => worm.id === wormId);
+    if (!w || w.isAlive() || this.phase !== 'playing') return;
+    const def = WEAPON_REGISTRY[weaponId];
+    if (def && w.money >= def.price) {
+      w.money -= def.price;
+      w.setWeapon(weaponId);
+    } else {
+      w.setWeapon(DEFAULT_WEAPON);
+    }
+    const others = this.worms.filter(o => o !== w && o.isAlive());
+    const spawn = this.terrain.findSpawnPoint(others);
+    w.spawn(spawn.x, spawn.y);
   }
+
+  private endMatch(winner: Worm, winnerTeam: number) {
+    if (this.phase !== 'playing') return;
+    this.phase = 'over';
+    this.net.broadcast({ type: 'MATCH_OVER', winnerId: winner.id, winnerTeam });
+    this.showResult(winner, winnerTeam);
+  }
+
+  private showResult(winner: Worm | undefined, winnerTeam: number) {
+    const local = this.getLocalWorm();
+    const isTeams = winnerTeam >= 0;
+    const result: MatchResult = {
+      winnerName: isTeams ? `Équipe ${CONFIG.TEAM_NAMES[winnerTeam]}` : (winner?.name ?? '?'),
+      winnerTeam,
+      isLocalWinner: isTeams ? !!local && this.teamOf(local.id) === winnerTeam : !!local && local === winner,
+      standings: this.getStandings()
+    };
+    this.result = result;
+    this.onMatchOver?.(result);
+  }
+
+  public getStandings(): Worm[] {
+    const key = (w: Worm) => (this.modifiers.gameMode === 'koth' ? w.score : w.frags);
+    return [...this.worms].sort((a, b) => key(b) - key(a) || a.deaths - b.deaths);
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Networking
+  // ════════════════════════════════════════════════════════════════════════
 
   private setupNetworkCallbacks() {
-    this.net.onMessageReceived = (msg: NetMessage, fromId: string) => {
-      if (this.mode === 'online_host') {
-        if (msg.type === 'INPUT') {
-          // Auto-register if not yet in worms
-          if (!this.worms.some(w => w.id === fromId) && this.worms.length < CONFIG.MAX_PLAYERS) {
-            this.addNetworkPlayer(fromId, 'Invité', DEFAULT_LOADOUT);
-          }
-          this.remoteInputs.set(fromId, msg.input);
-        } else if (msg.type === 'JOIN') {
-          if (this.lobbyPlayers.size < CONFIG.MAX_PLAYERS) {
-            const playerIndex = this.lobbyPlayers.size;
-            const color = CONFIG.PLAYER_COLORS[playerIndex % CONFIG.PLAYER_COLORS.length];
-            this.lobbyPlayers.set(fromId, {
-              id: fromId,
-              name: msg.name || `Invité ${playerIndex + 1}`,
-              color,
-              isHost: false,
-              loadout: msg.loadout || DEFAULT_LOADOUT
-            });
-            this.addNetworkPlayer(fromId, msg.name, msg.loadout);
-          }
-
-          this.net.sendTo(fromId, {
-            type: 'WELCOME',
-            playerId: fromId,
-            mapSeed: this.mapSeed,
-            mapWidth: CONFIG.MAP_WIDTH,
-            mapHeight: CONFIG.MAP_HEIGHT,
-            modifiers: this.modifiers,
-            players: this.getLobbyPlayers()
-          });
-
-          this.broadcastLobbyUpdate();
-        } else if (msg.type === 'SET_MODIFIERS') {
-          this.setModifiers(msg.modifiers);
-        } else if (msg.type === 'SELECT_WEAPON_RESPAWN') {
-          const w = this.worms.find(worm => worm.id === fromId);
-          if (w) {
-            w.setLoadout([msg.weaponId]);
-            w.waitingForShop = false;
-            const spawn = this.terrain.findSpawnPoint();
-            w.spawn(spawn.x, spawn.y);
-          }
-        }
-      } else if (this.mode === 'online_client') {
-        if (msg.type === 'WELCOME') {
-          this.modifiers = msg.modifiers;
-          this.fragLimit = msg.modifiers.fragLimit;
-          if (this.mapSeed !== msg.mapSeed) {
-            this.mapSeed = msg.mapSeed;
-            this.terrain.generateMap(msg.mapSeed, msg.modifiers.mapType || 'cave', msg.modifiers.acidEnabled !== false);
-          }
-          this.onWelcomeReceived?.();
-          this.onLobbyUpdate?.(msg.players, msg.modifiers);
-        } else if (msg.type === 'LOBBY_UPDATE') {
-          this.modifiers = msg.modifiers;
-          this.fragLimit = msg.modifiers.fragLimit;
-          this.onLobbyUpdate?.(msg.players, msg.modifiers);
-        } else if (msg.type === 'START_MATCH') {
-          this.mapSeed = msg.mapSeed;
-          this.terrain.generateMap(msg.mapSeed, msg.modifiers.mapType || 'cave', msg.modifiers.acidEnabled !== false);
-          this.modifiers = msg.modifiers;
-          this.fragLimit = msg.modifiers.fragLimit;
-          this.kothScores = [0, 0];
-          this.kothZoneHolder = -1;
-          this.particles.clear();
-          this.projectiles = [];
-          this.worms = [];
-
-          for (const p of msg.players) {
-            const w = new Worm(p.id, p.name, p.color, false, ['bazooka']);
-            w.applyModifiers(this.modifiers);
-            w.health = 0; // Not spawned yet! Waiting for shop
-            w.waitingForShop = true;
-            this.worms.push(w);
-          }
-
-          this.isRunning = true;
-          this.onStartMatchReceived?.(msg.modifiers);
-
-          // Trigger shop for local client worm
-          const localWorm = this.getLocalWorm();
-          if (localWorm) {
-            this.onLocalWormDied?.(localWorm, 0);
-          }
-        } else if (msg.type === 'STATE') {
-          this.applyWorldState(msg);
-        } else if (msg.type === 'MATCH_OVER') {
-          const winner = this.worms.find(w => w.id === msg.winnerId);
-          if (winner) {
-            this.matchWinner = winner;
-            this.onMatchEnd?.(winner);
-          }
-        }
-      }
+    this.net.onMessageReceived = (msg, fromId) => {
+      if (this.role === 'host') this.handleHostMessage(msg, fromId);
+      else this.handleClientMessage(msg);
     };
 
     this.net.onPeerLeft = (peerId) => {
-      if (this.mode === 'online_host') {
-        this.lobbyPlayers.delete(peerId);
+      if (this.role === 'host') {
+        this.players = this.players.filter(p => p.id !== peerId);
         this.worms = this.worms.filter(w => w.id !== peerId);
-        this.broadcastLobbyUpdate();
+        this.remoteInputs.delete(peerId);
+        const teams = { ...this.modifiers.teams };
+        delete teams[peerId];
+        this.modifiers.teams = teams;
+        if (this.phase !== 'menu') this.emitLobby();
+      } else if (this.phase !== 'menu') {
+        this.phase = 'menu';
+        this.onDisconnected?.();
       }
     };
   }
 
-  public initMatch(
-    mode: GameMode,
-    myLoadout: WeaponId[] = DEFAULT_LOADOUT,
-    myName: string = 'Hôte',
-    modifiers: MatchModifiers = DEFAULT_MODIFIERS
-  ) {
-    this.mode = mode;
-    this.modifiers = { ...modifiers };
-    this.fragLimit = this.modifiers.fragLimit;
-    this.matchWinner = null;
-    this.particles.clear();
-    this.projectiles = [];
-    this.worms = [];
-    this.remoteInputs.clear();
-    this.pendingNetEvents = [];
-
-    if (mode === 'online_host') {
-      this.mapSeed = Math.floor(Math.random() * 1000000);
-      this.terrain.generateMap(this.mapSeed, this.modifiers.mapType || 'cave', this.modifiers.acidEnabled !== false);
-      this.kothScores = [0, 0];
-      this.kothZoneHolder = -1;
-
-      // Register host in lobby
-      this.lobbyPlayers.clear();
-      const hostColor = CONFIG.PLAYER_COLORS[0];
-      const hostInfo: LobbyPlayerInfo = {
-        id: this.net.myPeerId,
-        name: myName || 'Hôte',
-        color: hostColor,
-        isHost: true,
-        loadout: myLoadout
-      };
-      this.lobbyPlayers.set(this.net.myPeerId, hostInfo);
-
-      const hostWorm = new Worm(this.net.myPeerId, hostInfo.name, hostColor, false, myLoadout);
-      hostWorm.applyModifiers(this.modifiers);
-      const spawn = this.terrain.findSpawnPoint();
-      hostWorm.spawn(spawn.x, spawn.y);
-      this.worms.push(hostWorm);
-    } else if (mode === 'online_client') {
-      this.terrain.generateMap(this.mapSeed, this.modifiers.mapType || 'cave', this.modifiers.acidEnabled !== false);
-      this.kothScores = [0, 0];
-      this.kothZoneHolder = -1;
-      const clientColor = CONFIG.PLAYER_COLORS[1];
-      const clientWorm = new Worm(this.net.myPeerId, myName || 'Moi', clientColor, false, myLoadout);
-      clientWorm.applyModifiers(this.modifiers);
-      const spawn = this.terrain.findSpawnPoint();
-      clientWorm.spawn(spawn.x, spawn.y);
-      this.worms.push(clientWorm);
-    }
-
-    this.isRunning = false; // Waiting for Host to click Start Match in lobby
-  }
-
-  public startHostMatch() {
-    if (this.mode !== 'online_host') return;
-
-    this.mapSeed = Math.floor(Math.random() * 1000000);
-    this.terrain.generateMap(this.mapSeed, this.modifiers.mapType || 'cave', this.modifiers.acidEnabled !== false);
-    this.particles.clear();
-    this.projectiles = [];
-    this.worms = [];
-    this.kothScores = [0, 0];
-    this.kothZoneHolder = -1;
-
-    const players = this.getLobbyPlayers();
-    for (const p of players) {
-      const w = new Worm(p.id, p.name, p.color, false, ['bazooka']);
-      w.applyModifiers(this.modifiers);
-      w.health = 0; // Not spawned yet! Waiting for shop
-      w.waitingForShop = true;
-      this.worms.push(w);
-    }
-
-    this.isRunning = true;
-    this.net.broadcast({
-      type: 'START_MATCH',
-      mapSeed: this.mapSeed,
-      modifiers: this.modifiers,
-      players
-    });
-
-    // Trigger shop for host local worm
-    const localWorm = this.getLocalWorm();
-    if (localWorm) {
-      this.onLocalWormDied?.(localWorm, 0);
+  private handleHostMessage(msg: NetMessage, fromId: string) {
+    switch (msg.type) {
+      case 'JOIN':
+        this.handleJoin(fromId, msg.name);
+        break;
+      case 'INPUT': {
+        let entry = this.remoteInputs.get(fromId);
+        if (!entry) {
+          entry = { queue: [], last: { ...EMPTY_INPUT }, ack: 0 };
+          this.remoteInputs.set(fromId, entry);
+        }
+        entry.queue.push({ seq: msg.seq, input: msg.input });
+        break;
+      }
+      case 'SELECT_WEAPON':
+        this.applyWeaponChoice(fromId, msg.weaponId);
+        break;
     }
   }
 
-  /**
-   * Spawns a worm after purchasing/choosing an weapon in the shop.
-   */
-  public selectWeaponAndRespawn(wormId: string, weaponId: WeaponId) {
-    if (this.mode === 'online_host') {
-      const w = this.worms.find(worm => worm.id === wormId);
-      if (w) {
-        w.setLoadout([weaponId]);
-        w.waitingForShop = false;
-        const spawn = this.terrain.findSpawnPoint();
-        w.spawn(spawn.x, spawn.y);
-      }
-    } else {
-      const localWorm = this.getLocalWorm();
-      if (localWorm) {
-        localWorm.setLoadout([weaponId]);
-        localWorm.waitingForShop = false;
-      }
-      this.net.broadcast({
-        type: 'SELECT_WEAPON_RESPAWN',
-        weaponId
+  private handleJoin(peerId: string, rawName: string) {
+    if (this.phase === 'menu') return;
+    let player = this.players.find(p => p.id === peerId);
+    const isNew = !player;
+    if (!player) {
+      if (this.players.length >= CONFIG.MAX_PLAYERS) return;
+      const used = new Set(this.players.map(p => p.color));
+      const color = CONFIG.PLAYER_COLORS.find(c => !used.has(c)) ?? CONFIG.PLAYER_COLORS[0];
+      const name = (rawName || '').trim().slice(0, 16) || `Sorcier ${this.players.length + 1}`;
+      player = { id: peerId, name, color, isHost: false };
+      this.players.push(player);
+      if (this.modifiers.gameMode === 'teams') this.assignMissingTeams();
+    }
+
+    this.net.sendTo(peerId, { type: 'WELCOME', playerId: peerId, players: this.players, modifiers: this.modifiers });
+
+    // Joining a match in progress: send a snapshot of the (already blasted) terrain
+    if (isNew && this.isInMatch()) {
+      this.worms.push(this.createWorm(player));
+      this.net.sendTo(peerId, {
+        type: 'START_MATCH',
+        players: this.players,
+        modifiers: this.modifiers,
+        terrain: this.terrain.encodeMaterials()
       });
     }
+    this.emitLobby();
   }
 
-  public addNetworkPlayer(peerId: string, name: string, loadout: WeaponId[]) {
-    if (this.worms.length >= CONFIG.MAX_PLAYERS) return;
-    let worm = this.worms.find(w => w.id === peerId);
-    if (!worm) {
-      const playerIndex = this.worms.length;
-      const color = CONFIG.PLAYER_COLORS[playerIndex % CONFIG.PLAYER_COLORS.length];
-      worm = new Worm(peerId, name || `Invité ${playerIndex + 1}`, color, false, loadout);
-      worm.applyModifiers(this.modifiers);
-      const spawn = this.terrain.findSpawnPoint();
-      worm.spawn(spawn.x, spawn.y);
-      this.worms.push(worm);
+  private handleClientMessage(msg: NetMessage) {
+    switch (msg.type) {
+      case 'WELCOME':
+        this.players = msg.players;
+        this.modifiers = msg.modifiers;
+        this.onWelcome?.();
+        this.onLobbyUpdate?.();
+        break;
+      case 'LOBBY_UPDATE':
+        this.players = msg.players;
+        this.modifiers = msg.modifiers;
+        this.onLobbyUpdate?.();
+        break;
+      case 'START_MATCH':
+        this.players = msg.players;
+        this.modifiers = msg.modifiers;
+        this.setupMatch();
+        if (msg.terrain) this.terrain.loadMaterials(new Uint8Array(msg.terrain));
+        this.worms = this.players.map(p => this.createWorm(p));
+        this.onMatchStart?.();
+        this.openLocalShop();
+        break;
+      case 'STATE':
+        if (this.isInMatch()) this.pendingStates.push(msg);
+        break;
+      case 'MATCH_OVER':
+        this.flushStates();
+        this.phase = 'over';
+        this.showResult(this.worms.find(w => w.id === msg.winnerId), msg.winnerTeam);
+        break;
+      case 'RETURN_TO_LOBBY':
+        this.phase = 'lobby';
+        this.worms = [];
+        this.projectiles = [];
+        this.onReturnToLobby?.();
+        break;
     }
   }
 
-  public triggerScreenShake(duration: number = 10, intensity: number = 4) {
-    this.shakeDuration = duration;
-    this.shakeIntensity = intensity;
+  private emit(ev: NetEvent) {
+    if (this.role === 'host') this.pendingEvents.push(ev);
   }
 
-  public spawnProjectiles(worm: Worm, weapon: WeaponDef, angle: number) {
-    const muzzleDist = 9;
-    const originX = worm.x + Math.cos(angle) * muzzleDist;
-    const originY = worm.y + Math.sin(angle) * muzzleDist;
+  // ════════════════════════════════════════════════════════════════════════
+  // Simulation tick (60 Hz)
+  // ════════════════════════════════════════════════════════════════════════
 
-    if (weapon.pelletCount && weapon.pelletCount > 1) {
-      // Shotgun / Dart Gun burst
-      for (let i = 0; i < weapon.pelletCount; i++) {
-        const spreadAngle = angle + (Math.random() - 0.5) * weapon.spread;
-        const speed = weapon.projectileSpeed * (0.9 + Math.random() * 0.2);
-        const proj = new Projectile({
-          id: this.nextProjectileId++,
-          ownerId: worm.id,
-          weapon,
-          x: originX,
-          y: originY,
-          vx: Math.cos(spreadAngle) * speed,
-          vy: Math.sin(spreadAngle) * speed
-        });
-        this.projectiles.push(proj);
+  public update() {
+    if (!this.isInMatch()) return;
+    this.lastTickTime = performance.now();
+    this.frame++;
+    if (this.shakeTime > 0) this.shakeTime--;
+
+    if (this.role === 'client') {
+      this.updateClient();
+    } else if (this.phase === 'playing') {
+      this.updateHost();
+    }
+    this.particles.update(this.terrain);
+  }
+
+  private updateClient() {
+    // The host streams 60 states/s during a match: a long silence means it is gone
+    if (this.phase === 'playing' && performance.now() - this.net.lastPacketTime > HOST_TIMEOUT_MS) {
+      this.leave();
+      this.onDisconnected?.();
+      return;
+    }
+    this.flushStates();
+    if (this.phase !== 'playing') return;
+
+    // Send the input, then predict our own wizard with it
+    const seq = ++this.inputSeq;
+    const input = { ...this.localInput };
+    this.net.broadcast({ type: 'INPUT', seq, input });
+
+    const local = this.getLocalWorm();
+    if (local && local.isAlive()) {
+      this.inputHistory.push({ seq, input });
+      if (this.inputHistory.length > 120) this.inputHistory.shift();
+      local.update(input, this.terrain, this.clientFx);
+    }
+    for (const p of this.projectiles) p.spawnTrail(this.particles);
+  }
+
+  private clientFx: WormFx = {
+    particles: this.particles,
+    onShoot: (w, weapon, angle) => this.castFX(w, weapon, angle),
+    playSounds: true
+  };
+
+  private updateHost() {
+    const mods = this.modifiers;
+
+    // 1. Wizards
+    for (const worm of this.worms) {
+      let input: WormInput;
+      if (worm.id === this.localId) {
+        input = this.localInput;
+      } else {
+        const entry = this.remoteInputs.get(worm.id);
+        if (entry) {
+          // One input per tick; drop the backlog if the client got far ahead
+          if (entry.queue.length > 6) entry.queue.splice(0, entry.queue.length - 2);
+          const next = entry.queue.shift();
+          if (next) {
+            entry.last = next.input;
+            entry.ack = next.seq;
+          }
+          input = entry.last;
+        } else {
+          input = EMPTY_INPUT;
+        }
       }
-    } else {
-      // Single projectile
-      const spreadAngle = angle + (Math.random() - 0.5) * weapon.spread;
-      const proj = new Projectile({
+      worm.update(input, this.terrain, {
+        particles: this.particles,
+        onShoot: (w, weapon, angle) => this.hostShoot(w, weapon, angle),
+        playSounds: worm.id === this.localId
+      });
+    }
+
+    // 2. Acid burns (10×/s)
+    if (++this.acidTick >= 6) {
+      this.acidTick = 0;
+      for (const w of this.worms) {
+        if (!w.isAlive()) continue;
+        const t = this.terrain;
+        if (t.isAcid(w.x, w.y + 6) || t.isAcid(w.x - 3, w.y + 6) || t.isAcid(w.x + 3, w.y + 6) ||
+            t.isAcid(w.x - 6, w.y) || t.isAcid(w.x + 6, w.y)) {
+          w.takeDamage(3, 0, 0);
+          this.particles.spawn(w.x + (Math.random() - 0.5) * 8, w.y + 4, (Math.random() - 0.5) * 0.5, -0.8, 'spark', '#44ff44', 1.5, 15);
+          if (!w.isAlive()) this.onWormKilled(w, 'acid');
+        }
+      }
+    }
+
+    // 3. Projectiles
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      const p = this.projectiles[i];
+      p.update(this);
+      if (!p.alive) this.projectiles.splice(i, 1);
+    }
+
+    // 4. King of the hill
+    if (mods.gameMode === 'koth' && this.phase === 'playing') this.updateKOTH();
+
+    // 5. Broadcast
+    this.broadcastState();
+  }
+
+  private updateKOTH() {
+    const zx = this.terrain.width / 2;
+    const zy = this.terrain.height / 2;
+    const inZone = this.worms.filter(w => w.isAlive() && Math.hypot(w.x - zx, w.y - zy) <= CONFIG.KOTH_ZONE_RADIUS);
+    if (inZone.length !== 1) return; // contested or empty
+    const holder = inZone[0];
+    holder.score++;
+    if (holder.score >= this.modifiers.fragLimit * CONFIG.KOTH_SECONDS_PER_POINT * 60) {
+      this.endMatch(holder, -1);
+    }
+  }
+
+  private hostShoot(worm: Worm, weapon: WeaponDef, angle: number) {
+    const ox = worm.x + Math.cos(angle) * 9;
+    const oy = worm.y + Math.sin(angle) * 9;
+    const count = weapon.pelletCount ?? 1;
+    for (let i = 0; i < count; i++) {
+      const a = angle + (Math.random() - 0.5) * weapon.spread;
+      const speed = weapon.projectileSpeed * (count > 1 ? 0.9 + Math.random() * 0.2 : 1);
+      this.projectiles.push(new Projectile({
         id: this.nextProjectileId++,
         ownerId: worm.id,
         weapon,
-        x: originX,
-        y: originY,
-        vx: Math.cos(spreadAngle) * weapon.projectileSpeed,
-        vy: Math.sin(spreadAngle) * weapon.projectileSpeed
-      });
-      this.projectiles.push(proj);
+        x: ox,
+        y: oy,
+        vx: Math.cos(a) * speed,
+        vy: Math.sin(a) * speed
+      }));
     }
+    this.castFX(worm, weapon, angle);
+    this.emit({ t: 'shot', id: worm.id, w: weapon.id });
   }
 
-  private handleProjectileDetonation(proj: Projectile) {
-    // Apply explosion scale modifier to shake intensity
-    const expScale = this.modifiers.explosionScale ?? 1.0;
-    if (proj.weapon.craterRadius >= 15) {
-      this.triggerScreenShake(8, proj.weapon.craterRadius * 0.25 * expScale);
+  /** Casting sound + staff sparkle */
+  private castFX(worm: Worm, weapon: WeaponDef, angle: number) {
+    sound.playSpellForWeapon(weapon.id);
+    this.particles.spawn(worm.x + Math.cos(angle) * 12, worm.y + Math.sin(angle) * 12,
+      Math.cos(angle) * 2, Math.sin(angle) * 2, 'spark', weapon.elementColor, 2.5, 12);
+  }
+
+  // ── ProjectileWorld implementation (host) ────────────────────────────────
+
+  public explode(p: Projectile, directHit: Worm | null) {
+    const mods = this.modifiers;
+    const weapon = p.weapon;
+    const r = weapon.craterRadius * mods.explosionScale;
+    const x = p.x;
+    const y = p.y;
+
+    if (this.terrain.carveCircle(x, y, r)) {
+      this.emit({ t: 'crater', x: Math.round(x), y: Math.round(y), r: Math.round(r * 10) / 10 });
+    }
+    this.explosionFX(x, y, r, weapon.elementColor);
+    this.emit({ t: 'boom', x: Math.round(x), y: Math.round(y), r: Math.round(r), c: weapon.elementColor });
+
+    // Damage: full damage on a direct hit, splash with falloff around
+    const blast = Math.max(r * 1.5, 6);
+    const knockScale = Math.min(5, 0.5 + weapon.damage / 12);
+    for (const w of this.worms) {
+      if (!w.isAlive()) continue;
+      const dx = w.x - x;
+      const dy = w.y - y;
+      const dist = Math.hypot(dx, dy);
+      let falloff: number;
+      if (w === directHit) {
+        falloff = 1;
+      } else {
+        falloff = 1 - Math.max(0, dist - w.radius) / blast;
+        if (falloff <= 0) continue;
+      }
+      let kx: number;
+      let ky: number;
+      if (dist > 0.5) {
+        kx = dx / dist;
+        ky = dy / dist;
+      } else {
+        const sp = Math.hypot(p.vx, p.vy) || 1;
+        kx = p.vx / sp;
+        ky = p.vy / sp;
+      }
+      this.damageWorm(w, Math.round(weapon.damage * falloff), kx * knockScale * falloff, ky * knockScale * falloff, p.ownerId);
     }
 
-    // Cluster bomb explosion splits into sub-clusters!
-    if (proj.weapon.splitCount && !proj.isSubCluster) {
-      for (let i = 0; i < proj.weapon.splitCount; i++) {
-        const subAngle = (Math.PI * 2 * i) / proj.weapon.splitCount + (Math.random() - 0.5) * 0.4;
-        const subSpeed = 2.5 + Math.random() * 3.5;
-        const subProj = new Projectile({
+    if (weapon.freezeDuration) {
+      for (const w of this.worms) {
+        if (w.isAlive() && w.id !== p.ownerId && Math.hypot(w.x - x, w.y - y) <= r * 2.5) {
+          w.freeze(weapon.freezeDuration);
+        }
+      }
+    }
+
+    if (weapon.acidPool && mods.acidEnabled) {
+      const ar = Math.round(r + 5);
+      this.terrain.addAcid(x, y, ar);
+      this.emit({ t: 'acid', x: Math.round(x), y: Math.round(y), r: ar });
+    }
+
+    if (weapon.toxic && directHit) {
+      this.particles.spawnBloodBurst(x, y, 12);
+    }
+
+    if (weapon.splitCount && !p.isSubCluster) {
+      const subWeapon: WeaponDef = { ...weapon, damage: 20, craterRadius: 12, bounces: 2, splitCount: undefined };
+      for (let i = 0; i < weapon.splitCount; i++) {
+        const a = (Math.PI * 2 * i) / weapon.splitCount + (Math.random() - 0.5) * 0.4;
+        const speed = 2.5 + Math.random() * 3.5;
+        const sub = new Projectile({
           id: this.nextProjectileId++,
-          ownerId: proj.ownerId,
-          weapon: {
-            ...proj.weapon,
-            damage: 20,
-            craterRadius: 12,
-            bounces: 2,
-            fuseFrames: 30 + Math.floor(Math.random() * 25)
-          },
-          x: proj.x,
-          y: proj.y - 2,
-          vx: Math.cos(subAngle) * subSpeed,
-          vy: Math.sin(subAngle) * subSpeed - 1.5,
+          ownerId: p.ownerId,
+          weapon: { ...subWeapon, fuseFrames: 30 + Math.floor(Math.random() * 25) },
+          x,
+          y: y - 2,
+          vx: Math.cos(a) * speed,
+          vy: Math.sin(a) * speed - 1.5,
           isSubCluster: true
         });
-        this.projectiles.push(subProj);
+        this.projectiles.push(sub);
       }
     }
   }
 
-  public update() {
-    if (!this.isRunning) return;
-
-    // Shake decay
-    if (this.shakeDuration > 0) {
-      this.shakeDuration--;
+  public pierce(p: Projectile, x0: number, y0: number, x1: number, y1: number) {
+    const r = p.weapon.craterRadius * this.modifiers.explosionScale;
+    if (this.terrain.carveLine(x0, y0, x1, y1, r)) {
+      const q = (v: number) => Math.round(v);
+      this.emit({ t: 'line', x0: q(x0), y0: q(y0), x1: q(x1), y1: q(y1), r: Math.round(r * 10) / 10 });
     }
-    this.renderFrameTime++;
+  }
 
-    if (this.mode === 'online_client') {
-      // 1. Broadcast local inputs to host at 60Hz
-      this.net.broadcast({
-        type: 'INPUT',
-        seq: this.netSeq++,
-        input: this.localP1Input
-      });
+  public bounce(p: Projectile) {
+    if (p.weapon.id === 'bouncy_ball') sound.playBouncy();
+    else sound.playGrenadeBounce();
+  }
 
-      // 2. Client-side local prediction: simulate local worm physics
-      const localWorm = this.getLocalWorm();
-      if (localWorm) {
-        localWorm.update(
-          this.localP1Input,
-          this.terrain,
-          this.particles,
-          () => {}
-        );
-      }
-
-      // 3. Update local particles
-      this.particles.update(this.terrain);
-      return;
-    }
-
-    // --- Host Authoritative Simulation ---
+  private damageWorm(w: Worm, damage: number, kx: number, ky: number, attackerId: string) {
     const mods = this.modifiers;
+    const self = attackerId === w.id;
+    let dmg = damage;
+    if (self && mods.noSelfDamage) dmg = 0;
+    if (!self && mods.gameMode === 'teams' && this.teamOf(attackerId) === this.teamOf(w.id)) dmg = 0;
+    dmg = Math.round(dmg * mods.damageScale);
 
-    // 1. Update Worms (up to 8 players)
-    for (const worm of this.worms) {
-      let input: WormInput;
-      if (worm.id === this.net.myPeerId) {
-        input = this.localP1Input;
-      } else {
-        input = this.remoteInputs.get(worm.id) || { left: false, right: false, up: false, down: false, jump: false, fire: false, rope: false };
-      }
-      worm.update(input, this.terrain, this.particles, (w, wep, ang) => this.spawnProjectiles(w, wep, ang));
-
-      // Handle Respawn for all worms
-      if (!worm.isAlive() && !worm.waitingForShop && worm.respawnTimer === 0) {
-        const spawn = this.terrain.findSpawnPoint();
-        worm.spawn(spawn.x, spawn.y);
-      }
+    w.takeDamage(dmg, kx, ky);
+    if (dmg > 0) {
+      const n = Math.max(3, Math.min(25, Math.round(dmg / 2)));
+      this.particles.spawnBloodBurst(w.x, w.y, n);
+      this.emit({ t: 'blood', x: Math.round(w.x), y: Math.round(w.y), n });
+      sound.playHurt();
     }
-
-    // 2. Acid damage tick (every 6 frames = ~10 times/sec)
-    this.acidTickAccum++;
-    if (this.acidTickAccum >= 6) {
-      this.acidTickAccum = 0;
-      for (const worm of this.worms) {
-        if (!worm.isAlive()) continue;
-        // Check if worm feet are touching acid
-        const feetY = worm.y + 5;
-        if (
-          this.terrain.isAcid(worm.x, feetY) ||
-          this.terrain.isAcid(worm.x - 3, feetY) ||
-          this.terrain.isAcid(worm.x + 3, feetY) ||
-          this.terrain.isAcid(worm.x, worm.y)
-        ) {
-          // 3 HP per 6 frames = ~30 HP/s (corrosive!)
-          worm.takeDamage(3, 0, 0, 'acid');
-          // Green acid particles
-          this.particles.spawn(worm.x + (Math.random() - 0.5) * 8, worm.y + 4, (Math.random() - 0.5) * 0.5, -0.8, 'spark', '#44ff44', 1.5, 15);
-          if (!worm.isAlive()) {
-            this.onWormKilled(worm, 'acid');
-          }
-        }
-      }
-    }
-
-    // 3. Update Projectiles (with damageScale, noSelfDamage, explosionScale, friendlyFire)
-    for (let i = this.projectiles.length - 1; i >= 0; i--) {
-      const p = this.projectiles[i];
-      const damageScale = mods.damageScale ?? 1.0;
-
-      p.update(
-        this.terrain,
-        this.particles,
-        this.worms.map(w => ({
-          id: w.id,
-          x: w.x,
-          y: w.y,
-          radius: w.radius,
-          takeDamage: (dmg: number, kx: number, ky: number, attId: string) => {
-            // No self damage modifier
-            if (mods.noSelfDamage && attId === w.id) return;
-            // Friendly fire check (teams mode)
-            if (mods.gameMode === 'teams') {
-              const attackerTeam = mods.teams[attId] ?? -1;
-              const victimTeam = mods.teams[w.id] ?? -1;
-              if (attackerTeam !== -1 && attackerTeam === victimTeam && attId !== w.id) return;
-            }
-            const scaledDmg = Math.round(dmg * damageScale);
-            w.takeDamage(scaledDmg, kx, ky, attId);
-            if (scaledDmg > 0) {
-              this.particles.spawnBloodBurst(w.x, w.y, Math.min(25, scaledDmg / 2));
-            }
-            // Check if killed
-            if (!w.isAlive()) {
-              this.onWormKilled(w, attId);
-            }
-          },
-          isAlive: () => w.isAlive()
-        })),
-        (proj) => this.handleProjectileDetonation(proj)
-      );
-
-      if (!p.alive) {
-        // Handle acid pool from acid_bomb
-        if (p.acidPoolCenter) {
-          this.terrain.rawCarveAcid(p.acidPoolCenter.x, p.acidPoolCenter.y, p.acidPoolCenter.r);
-        }
-        this.projectiles.splice(i, 1);
-      }
-    }
-
-    // 4. KOTH Zone logic (only host computes this)
-    if (mods.gameMode === 'koth') {
-      this.updateKOTH();
-    }
-
-    // 5. Update Particles
-    this.particles.update(this.terrain);
-
-    // 6. Host broadcasts state to peers at 60Hz
-    this.broadcastHostState();
+    if (!w.isAlive()) this.onWormKilled(w, attackerId);
   }
 
-  /** King of the Hill zone scoring. Zone is a circle at map center, radius 40px. */
-  private updateKOTH() {
-    const zoneX = this.terrain.width / 2;
-    const zoneY = this.terrain.height / 2;
-    const zoneR = 40;
-    const mods = this.modifiers;
-
-    const inZone = this.worms.filter(w => w.isAlive() && Math.hypot(w.x - zoneX, w.y - zoneY) <= zoneR);
-
-    if (mods.gameMode === 'teams') {
-      // Check which teams have worms in zone
-      const teamsInZone = new Set(inZone.map(w => mods.teams[w.id] ?? 0));
-      if (teamsInZone.size === 1) {
-        const controllingTeam = [...teamsInZone][0];
-        // 1 point per 60 frames = 1 pt/sec
-        this.kothScores[controllingTeam] = (this.kothScores[controllingTeam] || 0) + 1 / 60;
-        if (this.kothScores[controllingTeam] >= this.fragLimit * 12 && !this.matchWinner) {
-          const winner = inZone.find(w => (mods.teams[w.id] ?? 0) === controllingTeam) || this.worms[0];
-          this.matchWinner = winner;
-          this.onMatchEnd?.(winner);
-          this.net.broadcast({ type: 'MATCH_OVER', winnerId: winner.id });
-        }
-      }
-    } else {
-      // FFA: only 1 worm in zone to control it
-      if (inZone.length === 1) {
-        const controller = inZone[0];
-        controller.frags += 1 / 60; // fractional point accumulation
-        const score = Math.floor(controller.frags);
-        if (score >= this.fragLimit * 12 && !this.matchWinner) {
-          this.matchWinner = controller;
-          this.onMatchEnd?.(controller);
-          this.net.broadcast({ type: 'MATCH_OVER', winnerId: controller.id });
-        }
-      }
-    }
-  }
-
-  public onWormKilled(victim: Worm, attackerId?: string) {
-    if (victim.waitingForShop) return; // already dead & waiting for shop
+  private onWormKilled(victim: Worm, attackerId: string) {
+    if (victim.waitingForShop) return;
     victim.health = 0;
     victim.waitingForShop = true;
-    victim.respawnTimer = 0;
     victim.deaths++;
     victim.money += MONEY_DEATH;
     victim.rope.release();
     this.particles.spawnGibs(victim.x, victim.y);
     sound.playDie();
 
-    const killer = attackerId ? this.worms.find(k => k.id === attackerId) : undefined;
-    if (killer && killer.id !== victim.id) {
-      // 💰 Kill reward
+    const killer = this.worms.find(k => k.id === attackerId);
+    let cause: 'acid' | 'self' | undefined;
+    if (attackerId === 'acid') cause = 'acid';
+    else if (!killer || killer === victim) cause = 'self';
+
+    const validKill = killer && killer !== victim;
+    this.emit({ t: 'kill', killer: validKill ? killer.name : null, victim: victim.name, cause });
+    this.onKill?.(validKill ? killer.name : null, victim.name, cause);
+
+    if (validKill) {
       killer.money += MONEY_KILL;
-      if (this.modifiers.gameMode === 'ffa') {
-        killer.frags++;
-        this.onKillFeed?.(killer.name, victim.name);
-        if (killer.frags >= this.fragLimit && !this.matchWinner) {
-          this.matchWinner = killer;
-          this.onMatchEnd?.(killer);
-          this.net.broadcast({ type: 'MATCH_OVER', winnerId: killer.id });
-        }
+      killer.frags++;
+      if (this.modifiers.gameMode === 'ffa' && killer.frags >= this.modifiers.fragLimit) {
+        this.endMatch(killer, -1);
       } else if (this.modifiers.gameMode === 'teams') {
-        killer.frags++;
-        const killerTeam = this.modifiers.teams[killer.id] ?? 0;
-        this.kothScores[killerTeam] = (this.kothScores[killerTeam] || 0) + 1;
-        this.onKillFeed?.(killer.name, victim.name);
-        if (this.kothScores[killerTeam] >= this.fragLimit && !this.matchWinner) {
-          this.matchWinner = killer;
-          this.onMatchEnd?.(killer);
-          this.net.broadcast({ type: 'MATCH_OVER', winnerId: killer.id });
-        }
-      } else {
-        // KOTH: kills still count toward kills but win by zone
-        killer.frags++;
-        this.onKillFeed?.(killer.name, victim.name);
-      }
-    } else {
-      if (attackerId === 'acid') {
-        this.onKillFeed?.(victim.name, 'Dissous par l\'acide');
-      } else {
-        this.onKillFeed?.(victim.name, 'S\'est suicidé');
+        const team = this.teamOf(killer.id);
+        this.teamScores[team]++;
+        if (this.teamScores[team] >= this.modifiers.fragLimit) this.endMatch(killer, team);
       }
     }
 
-    // 🛒 Trigger shop for LOCAL worm if it's the one that died
-    if (victim.id === this.net.myPeerId) {
-      this.onLocalWormDied?.(victim, 0);
+    if (victim.id === this.localId && this.phase === 'playing') this.onLocalDeath?.(victim);
+  }
+
+  private explosionFX(x: number, y: number, r: number, color?: string) {
+    if (r >= 10) {
+      this.particles.spawnExplosionFX(x, y, r, color);
+      sound.playExplosion(r);
+    } else {
+      this.particles.spawn(x, y, 0, 0, 'spark', color, 2, 20);
+      if (r >= 6) sound.playExplosion(r);
+    }
+    if (r >= 15) {
+      const d = Math.hypot(x - this.camX, y - this.camY);
+      const intensity = r * 0.25 * Math.max(0, 1 - d / 300);
+      if (intensity > 0.5) {
+        this.shakeTime = 8;
+        this.shakeIntensity = intensity;
+      }
     }
   }
 
-  private broadcastHostState() {
-    const wormStates: WormNetState[] = this.worms.map(w => ({
+  private broadcastState() {
+    const r1 = (v: number) => Math.round(v * 10) / 10;
+    const r2 = (v: number) => Math.round(v * 100) / 100;
+    const worms: WormNetState[] = this.worms.map(w => ({
       id: w.id,
-      name: w.name,
-      color: w.color,
-      x: Math.round(w.x * 10) / 10,
-      y: Math.round(w.y * 10) / 10,
-      vx: Math.round(w.vx * 10) / 10,
-      vy: Math.round(w.vy * 10) / 10,
-      health: w.health,
+      x: r2(w.x),
+      y: r2(w.y),
+      vx: r2(w.vx),
+      vy: r2(w.vy),
+      hp: w.health,
       frags: w.frags,
       deaths: w.deaths,
-      facing: w.facing,
-      aimAngle: Math.round(w.aimAngle * 100) / 100,
-      weaponIndex: w.currentWeaponIndex,
-      currentWeaponId: w.getCurrentWeapon().id,
-      ropeState: w.rope.state,
-      hookX: Math.round(w.rope.hookX),
-      hookY: Math.round(w.rope.hookY)
+      score: w.score,
+      money: w.money,
+      aim: r2(w.aimAngle),
+      weapon: w.weapon.id,
+      frozen: w.freezeTimer,
+      rope: w.rope.state,
+      hx: r1(w.rope.hookX),
+      hy: r1(w.rope.hookY),
+      rl: r1(w.rope.length),
+      ack: this.remoteInputs.get(w.id)?.ack ?? 0
     }));
 
-    const projStates: ProjectileNetState[] = this.projectiles.map(p => ({
-      id: p.id,
-      weaponId: p.weapon.id,
-      x: Math.round(p.x),
-      y: Math.round(p.y),
-      vx: Math.round(p.vx * 10) / 10,
-      vy: Math.round(p.vy * 10) / 10
-    }));
-
-    this.net.broadcast({
-      type: 'STATE',
-      seq: this.netSeq++,
-      worms: wormStates,
-      projectiles: projStates,
-      events: [...this.pendingNetEvents]
+    const projectiles: ProjectileNetState[] = this.projectiles.map(p => {
+      const s: ProjectileNetState = { id: p.id, w: p.weapon.id, x: r1(p.x), y: r1(p.y), vx: r1(p.vx), vy: r1(p.vy) };
+      if (p.isSubCluster) s.sub = 1;
+      if (p.armed) s.armed = 1;
+      return s;
     });
 
-    this.pendingNetEvents = [];
+    this.net.broadcast({ type: 'STATE', worms, projectiles, events: this.pendingEvents, teamScores: this.teamScores });
+    this.pendingEvents = [];
   }
 
-  private applyWorldState(msg: { worms: WormNetState[]; projectiles: ProjectileNetState[]; events: NetEvent[] }) {
-    // 1. Apply events (craters, blood, sounds)
-    for (const ev of msg.events) {
-      if (ev.type === 'crater') {
-        this.terrain.carveCircle(ev.x, ev.y, ev.r);
-        this.particles.spawnExplosionFX(ev.x, ev.y, ev.r);
-        sound.playExplosion(ev.r);
-      } else if (ev.type === 'blood') {
-        this.particles.spawnBloodBurst(ev.x, ev.y, ev.count);
-      } else if (ev.type === 'sound') {
-        sound.playSpellForWeapon(ev.name);
-      }
-    }
+  // ════════════════════════════════════════════════════════════════════════
+  // Client: applying the host state
+  // ════════════════════════════════════════════════════════════════════════
 
-    // 2. Synchronize worms (up to 8 players)
+  private flushStates() {
+    if (this.pendingStates.length === 0) return;
+    const states = this.pendingStates;
+    this.pendingStates = [];
+    for (const s of states) {
+      for (const ev of s.events) this.applyEvent(ev);
+    }
+    this.applyWorldState(states[states.length - 1]);
+  }
+
+  private applyEvent(ev: NetEvent) {
+    switch (ev.t) {
+      case 'crater':
+        this.terrain.carveCircle(ev.x, ev.y, ev.r);
+        break;
+      case 'line':
+        this.terrain.carveLine(ev.x0, ev.y0, ev.x1, ev.y1, ev.r);
+        break;
+      case 'boom':
+        this.explosionFX(ev.x, ev.y, ev.r, ev.c);
+        break;
+      case 'acid':
+        this.terrain.addAcid(ev.x, ev.y, ev.r);
+        break;
+      case 'blood':
+        this.particles.spawnBloodBurst(ev.x, ev.y, ev.n);
+        sound.playHurt();
+        break;
+      case 'shot': {
+        if (ev.id === this.localId) break; // already played by our own prediction
+        const w = this.worms.find(o => o.id === ev.id);
+        if (w) this.castFX(w, WEAPON_REGISTRY[ev.w], w.aimAngle);
+        break;
+      }
+      case 'kill':
+        this.onKill?.(ev.killer, ev.victim, ev.cause);
+        break;
+    }
+  }
+
+  private applyWorldState(msg: StateMessage) {
+    this.teamScores = msg.teamScores;
+    const seen = new Set<string>();
+
     for (const ws of msg.worms) {
+      seen.add(ws.id);
       let worm = this.worms.find(w => w.id === ws.id);
       if (!worm) {
-        worm = new Worm(ws.id, ws.name, ws.color, false, ws.currentWeaponId ? [ws.currentWeaponId] : DEFAULT_LOADOUT);
-        worm.applyModifiers(this.modifiers);
+        const info = this.players.find(p => p.id === ws.id);
+        worm = this.createWorm(info ?? { id: ws.id, name: '?', color: '#ffffff', isHost: false });
         this.worms.push(worm);
       }
 
-      worm.name = ws.name;
-      worm.color = ws.color;
+      const wasAlive = worm.isAlive();
+      const isLocal = worm.id === this.localId;
 
-      if (ws.currentWeaponId && worm.getCurrentWeapon()?.id !== ws.currentWeaponId) {
-        worm.setLoadout([ws.currentWeaponId]);
-      }
-
-      if (ws.health <= 0 && worm.health > 0) {
-        sound.playDie();
+      if (wasAlive && ws.hp <= 0) {
         this.particles.spawnGibs(worm.x, worm.y);
+        sound.playDie();
       }
 
-      if (worm.id === this.net.myPeerId) {
-        const wasAlive = worm.health > 0;
-        // Authoritative stats from host
-        worm.health = ws.health;
-        worm.frags = ws.frags;
-        worm.deaths = ws.deaths;
+      worm.frags = ws.frags;
+      worm.deaths = ws.deaths;
+      worm.score = ws.score;
+      worm.money = ws.money;
+      worm.health = ws.hp;
 
-        if (ws.health <= 0) {
-          worm.x = ws.x;
-          worm.y = ws.y;
-          worm.vx = ws.vx;
-          worm.vy = ws.vy;
-          worm.rope.release();
-          if (wasAlive && !worm.waitingForShop) {
+      if (ws.hp <= 0) {
+        worm.rope.release();
+        if (isLocal) {
+          this.inputHistory = [];
+          if (wasAlive && this.phase === 'playing') {
             worm.waitingForShop = true;
-            this.onLocalWormDied?.(worm, 0);
-          }
-        } else {
-          // Position reconciliation with host
-          worm.waitingForShop = false;
-          const dx = ws.x - worm.x;
-          const dy = ws.y - worm.y;
-          const distSq = dx * dx + dy * dy;
-          if (distSq > 400) {
-            worm.x = ws.x;
-            worm.y = ws.y;
-            worm.vx = ws.vx;
-            worm.vy = ws.vy;
-          } else if (distSq > 4) {
-            worm.x += dx * 0.25;
-            worm.y += dy * 0.25;
+            this.onLocalDeath?.(worm);
           }
         }
+        continue;
+      }
+
+      const respawned = !wasAlive;
+      if (respawned || worm.weapon.id !== ws.weapon) {
+        if (!isLocal || respawned) worm.setWeapon(ws.weapon);
+      }
+      if (respawned) worm.waitingForShop = false;
+
+      if (isLocal && !respawned) {
+        this.reconcileLocal(worm, ws);
       } else {
-        // Remote worm: direct sync from host
+        worm.prevX = respawned ? ws.x : worm.x;
+        worm.prevY = respawned ? ws.y : worm.y;
         worm.x = ws.x;
         worm.y = ws.y;
         worm.vx = ws.vx;
         worm.vy = ws.vy;
-        worm.health = ws.health;
-        worm.frags = ws.frags;
-        worm.deaths = ws.deaths;
-        worm.facing = ws.facing;
-        worm.aimAngle = ws.aimAngle;
-        worm.currentWeaponIndex = ws.weaponIndex;
-        worm.rope.state = ws.ropeState;
-        worm.rope.hookX = ws.hookX;
-        worm.rope.hookY = ws.hookY;
+        worm.freezeTimer = ws.frozen;
+        if (!isLocal) {
+          worm.aimAngle = ws.aim;
+          worm.facing = Math.cos(ws.aim) >= 0 ? 1 : -1;
+        }
+        worm.rope.state = ws.rope;
+        worm.rope.hookX = ws.hx;
+        worm.rope.hookY = ws.hy;
+        worm.rope.length = ws.rl;
+        worm.grounded = false;
       }
     }
 
-    // 3. Synchronize projectiles
+    this.worms = this.worms.filter(w => seen.has(w.id));
+
+    // Projectiles (keep the objects to interpolate their motion)
+    const existing = new Map(this.projectiles.map(p => [p.id, p]));
     this.projectiles = msg.projectiles.map(ps => {
-      const wep = WEAPON_REGISTRY[ps.weaponId] || WEAPON_REGISTRY.bazooka;
-      return new Projectile({
-        id: ps.id,
-        ownerId: '',
-        weapon: wep,
-        x: ps.x,
-        y: ps.y,
-        vx: ps.vx,
-        vy: ps.vy
-      });
+      let p = existing.get(ps.id);
+      if (p) {
+        p.prevX = p.x;
+        p.prevY = p.y;
+      } else {
+        p = new Projectile({
+          id: ps.id, ownerId: '', weapon: WEAPON_REGISTRY[ps.w] ?? WEAPON_REGISTRY[DEFAULT_WEAPON],
+          x: ps.x, y: ps.y, vx: ps.vx, vy: ps.vy, isSubCluster: !!ps.sub
+        });
+      }
+      p.x = ps.x;
+      p.y = ps.y;
+      p.vx = ps.vx;
+      p.vy = ps.vy;
+      p.armed = !!ps.armed;
+      p.resting = ps.vx === 0 && ps.vy === 0;
+      return p;
     });
   }
 
-  public render() {
+  /**
+   * Client-side prediction: take the authoritative host state for our wizard and replay
+   * the inputs the host has not processed yet. No more rubber-banding when moving.
+   */
+  private reconcileLocal(worm: Worm, ws: WormNetState) {
+    const acked = this.inputHistory.find(h => h.seq === ws.ack);
+    this.inputHistory = this.inputHistory.filter(h => h.seq > ws.ack);
+
+    const keepPrevX = worm.prevX;
+    const keepPrevY = worm.prevY;
+    const predictedX = worm.x;
+    const predictedY = worm.y;
+
+    worm.x = ws.x;
+    worm.y = ws.y;
+    worm.vx = ws.vx;
+    worm.vy = ws.vy;
+    worm.freezeTimer = ws.frozen;
+    worm.rope.state = ws.rope;
+    worm.rope.hookX = ws.hx;
+    worm.rope.hookY = ws.hy;
+    worm.rope.length = ws.rl;
+    if (acked) worm.setRopeHeld(acked.input.rope);
+
+    for (const h of this.inputHistory) worm.update(h.input, this.terrain, null);
+
+    // Small residual errors are smoothed instead of snapped
+    const err = Math.hypot(worm.x - predictedX, worm.y - predictedY);
+    if (err < 3) {
+      worm.x = predictedX + (worm.x - predictedX) * 0.3;
+      worm.y = predictedY + (worm.y - predictedY) * 0.3;
+    }
+    worm.prevX = keepPrevX;
+    worm.prevY = keepPrevY;
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Camera & rendering
+  // ════════════════════════════════════════════════════════════════════════
+
+  public resizeCanvas() {
+    this.canvas.width = window.innerWidth;
+    this.canvas.height = window.innerHeight;
+    // Show roughly the same slice of the world whatever the screen size
+    this.camZoom = Math.max(this.canvas.width / 560, this.canvas.height / 350);
+  }
+
+  public screenToWorld(screenX: number, screenY: number): { x: number; y: number } {
+    return {
+      x: (screenX - this.canvas.width / 2) / this.camZoom + this.camX,
+      y: (screenY - this.canvas.height / 2) / this.camZoom + this.camY
+    };
+  }
+
+  public worldToScreen(worldX: number, worldY: number): { x: number; y: number } {
+    return {
+      x: (worldX - this.camX) * this.camZoom + this.canvas.width / 2,
+      y: (worldY - this.camY) * this.camZoom + this.canvas.height / 2
+    };
+  }
+
+  private renderAlpha(now: number): number {
+    return Math.max(0, Math.min(1, (now - this.lastTickTime) / CONFIG.TICK_MS));
+  }
+
+  private updateCamera(now: number, alpha: number) {
+    const dt = Math.min(100, now - (this.lastRenderTime || now));
+    this.lastRenderTime = now;
+    const target = this.getLocalWorm();
+    if (target && target.isAlive()) {
+      const tx = target.prevX + (target.x - target.prevX) * alpha;
+      const ty = target.prevY + (target.y - target.prevY) * alpha;
+      if (!this.camFollowing) {
+        this.camX = tx;
+        this.camY = ty;
+        this.camFollowing = true;
+      } else {
+        // Frame-rate independent smoothing
+        const k = 1 - Math.exp(-dt / 90);
+        this.camX += (tx - this.camX) * k;
+        this.camY += (ty - this.camY) * k;
+      }
+    } else {
+      this.camFollowing = false;
+    }
+
+    const halfW = this.canvas.width / (2 * this.camZoom);
+    const halfH = this.canvas.height / (2 * this.camZoom);
+    const W = this.terrain.width;
+    const H = this.terrain.height;
+    this.camX = halfW * 2 >= W ? W / 2 : Math.max(halfW, Math.min(W - halfW, this.camX));
+    this.camY = halfH * 2 >= H ? H / 2 : Math.max(halfH, Math.min(H - halfH, this.camY));
+  }
+
+  public render(now: number) {
+    if (!this.isInMatch()) return;
     const ctx = this.ctx;
     const cw = this.canvas.width;
     const ch = this.canvas.height;
+    const alpha = this.renderAlpha(now);
+    this.updateCamera(now, alpha);
 
-    // Clear entire screen
+    ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = '#0a0a0a';
     ctx.fillRect(0, 0, cw, ch);
 
     ctx.save();
-
-    // Apply camera: translate to center, scale by zoom, then offset by cam position
     ctx.translate(cw / 2, ch / 2);
     ctx.scale(this.camZoom, this.camZoom);
     ctx.translate(-this.camX, -this.camY);
-
-    // Screen shake: applied as a small sub-pixel jitter in world space
-    if (this.shakeDuration > 0) {
-      const ox = (Math.random() - 0.5) * this.shakeIntensity / this.camZoom;
-      const oy = (Math.random() - 0.5) * this.shakeIntensity / this.camZoom;
-      ctx.translate(ox, oy);
+    if (this.shakeTime > 0) {
+      ctx.translate((Math.random() - 0.5) * this.shakeIntensity / 2, (Math.random() - 0.5) * this.shakeIntensity / 2);
     }
 
-    // 1. Draw Terrain (dirt, rock, cavern sky) — pass time for acid animation
-    this.terrain.draw(ctx, this.renderFrameTime);
-
-    // 1b. Draw KOTH zone indicator (if KOTH mode)
-    if (this.modifiers.gameMode === 'koth') {
-      const zoneX = this.terrain.width / 2;
-      const zoneY = this.terrain.height / 2;
-      const zoneR = 40;
-      const pulse = 0.5 + 0.5 * Math.sin(this.renderFrameTime * 0.05);
-      ctx.save();
-      ctx.strokeStyle = `rgba(255, 215, 0, ${0.5 + pulse * 0.5})`;
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 4]);
-      ctx.beginPath();
-      ctx.arc(zoneX, zoneY, zoneR, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = `rgba(255, 215, 0, ${0.04 + pulse * 0.06})`;
-      ctx.beginPath();
-      ctx.arc(zoneX, zoneY, zoneR, 0, Math.PI * 2);
-      ctx.fill();
-      // Crown icon at center
-      ctx.font = '14px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = `rgba(255, 215, 0, ${0.6 + pulse * 0.4})`;
-      ctx.fillText('👑', zoneX, zoneY);
-      ctx.restore();
-    }
-
-    // 2. Draw Particles (blood, smoke, sparks)
+    this.terrain.draw(ctx, this.frame);
+    if (this.modifiers.gameMode === 'koth') this.drawKothZone(ctx);
     this.particles.draw(ctx);
-
-    // 3. Draw Projectiles
-    for (const proj of this.projectiles) {
-      proj.draw(ctx);
-    }
-
-    // 4. Draw Worms (all up to 8 worms)
-    for (const worm of this.worms) {
-      worm.draw(ctx);
-    }
+    for (const p of this.projectiles) p.draw(ctx, alpha);
+    for (const w of this.worms) w.draw(ctx, alpha, w.id === this.localId);
 
     ctx.restore();
-
-    // 5. Off-screen player indicators (drawn in screen space, after world transform is restored)
     this.drawOffScreenIndicators();
+  }
+
+  private drawKothZone(ctx: CanvasRenderingContext2D) {
+    const zx = this.terrain.width / 2;
+    const zy = this.terrain.height / 2;
+    const r = CONFIG.KOTH_ZONE_RADIUS;
+    const pulse = 0.5 + 0.5 * Math.sin(this.frame * 0.05);
+    ctx.save();
+    ctx.strokeStyle = `rgba(255, 215, 0, ${0.5 + pulse * 0.5})`;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.arc(zx, zy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = `rgba(255, 215, 0, ${0.04 + pulse * 0.06})`;
+    ctx.fill();
+    ctx.font = '14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('👑', zx, zy);
+    ctx.restore();
+  }
+
+  /** Arrows on the screen edge pointing to wizards outside the view. */
+  private drawOffScreenIndicators() {
+    const ctx = this.ctx;
+    const cw = this.canvas.width;
+    const ch = this.canvas.height;
+    const local = this.getLocalWorm();
+    const margin = 30;
+    const size = 12;
+
+    for (const worm of this.worms) {
+      if (!worm.isAlive() || worm === local) continue;
+      const { x: sx, y: sy } = this.worldToScreen(worm.x, worm.y);
+      const bodyR = worm.radius * this.camZoom + 4;
+      if (sx >= bodyR && sx <= cw - bodyR && sy >= bodyR && sy <= ch - bodyR) continue;
+
+      const angle = Math.atan2(sy - ch / 2, sx - cw / 2);
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      let t = Infinity;
+      if (Math.abs(cos) > 0.0001) t = Math.min(t, Math.abs((cw / 2 - margin) / cos));
+      if (Math.abs(sin) > 0.0001) t = Math.min(t, Math.abs((ch / 2 - margin) / sin));
+      const ex = cw / 2 + cos * t;
+      const ey = ch / 2 + sin * t;
+
+      ctx.save();
+      ctx.translate(ex, ey);
+      ctx.rotate(angle);
+      ctx.beginPath();
+      ctx.moveTo(size, 0);
+      ctx.lineTo(-size * 0.6, -size * 0.55);
+      ctx.lineTo(-size * 0.6, size * 0.55);
+      ctx.closePath();
+      ctx.fillStyle = worm.color;
+      ctx.globalAlpha = 0.9;
+      ctx.fill();
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.restore();
+
+      const label = worm.name;
+      const lx = Math.max(50, Math.min(cw - 50, ex - cos * (size + 14)));
+      const ly = Math.max(14, Math.min(ch - 10, ey - sin * (size + 14)));
+      ctx.save();
+      ctx.font = '600 12px Inter, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillText(label, lx + 1, ly + 1);
+      ctx.fillStyle = worm.color;
+      ctx.fillText(label, lx, ly);
+      ctx.restore();
+    }
   }
 }

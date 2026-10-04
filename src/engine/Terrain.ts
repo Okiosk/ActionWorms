@@ -23,9 +23,6 @@ export class Terrain {
   public acidCanvas: HTMLCanvasElement;
   public acidCtx: CanvasRenderingContext2D;
 
-  /** Optional callback fired after every explosion carve (used by Game.ts) */
-  public onCarve?: (cx: number, cy: number, radius: number) => void;
-
   constructor(width: number = CONFIG.MAP_WIDTH, height: number = CONFIG.MAP_HEIGHT) {
     this.width = width;
     this.height = height;
@@ -45,8 +42,6 @@ export class Terrain {
     this.acidCanvas.width = width;
     this.acidCanvas.height = height;
     this.acidCtx = this.acidCanvas.getContext('2d')!;
-
-    this.generateMap();
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -58,11 +53,13 @@ export class Terrain {
    * @param seed        Deterministic RNG seed
    * @param mapType     Layout theme ('cave' | 'volcano' | 'swiss' | 'fortress' | 'open')
    * @param acidEnabled Whether acid material is included in this match
+   * @param centerZoneRadius King-of-the-hill zone to clear at the centre (0 = none)
    */
   public generateMap(
     seed: number = 123456,
     mapType: MapType = 'cave',
-    acidEnabled: boolean = true
+    acidEnabled: boolean = true,
+    centerZoneRadius: number = 0
   ) {
     const rand = this.createPRNG(seed);
 
@@ -73,6 +70,14 @@ export class Terrain {
       case 'open':     this.generateOpen(rand, acidEnabled);     break;
       case 'cave':
       default:         this.generateCave(rand, acidEnabled);     break;
+    }
+
+    // King of the hill: open the central zone and give it a small floor
+    if (centerZoneRadius > 0) {
+      const cx = Math.round(this.width / 2);
+      const cy = Math.round(this.height / 2);
+      this.rawFillCircle(cx, cy, centerZoneRadius, CONFIG.MAT_AIR);
+      this.rawFillEllipse(cx, cy + centerZoneRadius - 4, Math.round(centerZoneRadius * 0.7), 5, CONFIG.MAT_DIRT);
     }
 
     this.renderInitialCanvases(rand);
@@ -562,38 +567,17 @@ export class Terrain {
     }
   }
 
-  /**
-   * Paints acid (MAT_ACID) inside a circle, but only over non-ROCK pixels.
-   * Existing AIR/DIRT pixels are converted — acid pools fill existing voids.
-   */
-  public rawCarveAcid(cx: number, cy: number, r: number) {
+  /** Paints acid inside a circle over non-rock pixels (generation only, no canvas update). */
+  private rawCarveAcid(cx: number, cy: number, r: number) {
     const r2 = r * r;
-    const minX = Math.max(0, cx - r);
-    const maxX = Math.min(this.width - 1, cx + r);
-    const minY = Math.max(0, cy - r);
-    const maxY = Math.min(this.height - 1, cy + r);
-
-    for (let y = minY; y <= maxY; y++) {
-      const dy = y - cy;
-      const rowOffset = y * this.width;
-      for (let x = minX; x <= maxX; x++) {
+    for (let y = Math.max(0, cy - r); y <= Math.min(this.height - 1, cy + r); y++) {
+      for (let x = Math.max(0, cx - r); x <= Math.min(this.width - 1, cx + r); x++) {
         const dx = x - cx;
-        if (dx * dx + dy * dy <= r2) {
-          if (this.materials[rowOffset + x] !== CONFIG.MAT_ROCK) {
-            this.materials[rowOffset + x] = CONFIG.MAT_ACID;
-          }
+        const dy = y - cy;
+        if (dx * dx + dy * dy <= r2 && this.materials[y * this.width + x] !== CONFIG.MAT_ROCK) {
+          this.materials[y * this.width + x] = CONFIG.MAT_ACID;
         }
       }
-    }
-
-    // Paint onto acid offscreen canvas
-    if (this.acidCtx) {
-      this.acidCtx.save();
-      this.acidCtx.fillStyle = '#22dd22';
-      this.acidCtx.beginPath();
-      this.acidCtx.arc(cx, cy, r, 0, Math.PI * 2);
-      this.acidCtx.fill();
-      this.acidCtx.restore();
     }
   }
 
@@ -614,22 +598,6 @@ export class Terrain {
     const iy = Math.floor(y);
     if (ix < 0 || ix >= this.width || iy < 0 || iy >= this.height) return true;
     return this.materials[iy * this.width + ix] !== CONFIG.MAT_AIR;
-  }
-
-  /** True only for MAT_ROCK (indestructible, not carved by explosions). */
-  public isRock(x: number, y: number): boolean {
-    const ix = Math.floor(x);
-    const iy = Math.floor(y);
-    if (ix < 0 || ix >= this.width || iy < 0 || iy >= this.height) return true;
-    return this.materials[iy * this.width + ix] === CONFIG.MAT_ROCK;
-  }
-
-  /** True only for MAT_DIRT (destructible). */
-  public isDirt(x: number, y: number): boolean {
-    const ix = Math.floor(x);
-    const iy = Math.floor(y);
-    if (ix < 0 || ix >= this.width || iy < 0 || iy >= this.height) return false;
-    return this.materials[iy * this.width + ix] === CONFIG.MAT_DIRT;
   }
 
   /**
@@ -685,11 +653,86 @@ export class Terrain {
       this.dirtCtx.arc(cx, cy, radius, 0, Math.PI * 2);
       this.dirtCtx.fill();
       this.dirtCtx.restore();
-
-      this.onCarve?.(cx, cy, radius);
     }
 
     return modified;
+  }
+
+  /**
+   * Carves a capsule (thick line) — used by piercing spells. Only dirt is removed.
+   */
+  public carveLine(x0: number, y0: number, x1: number, y1: number, radius: number): boolean {
+    const r = Math.max(1, radius);
+    const minX = Math.max(0, Math.floor(Math.min(x0, x1) - r));
+    const maxX = Math.min(this.width - 1, Math.ceil(Math.max(x0, x1) + r));
+    const minY = Math.max(0, Math.floor(Math.min(y0, y1) - r));
+    const maxY = Math.min(this.height - 1, Math.ceil(Math.max(y0, y1) + r));
+    const sx = x1 - x0;
+    const sy = y1 - y0;
+    const len2 = sx * sx + sy * sy;
+    const r2 = r * r;
+    let modified = false;
+
+    for (let y = minY; y <= maxY; y++) {
+      const rowOffset = y * this.width;
+      for (let x = minX; x <= maxX; x++) {
+        const idx = rowOffset + x;
+        if (this.materials[idx] !== CONFIG.MAT_DIRT) continue;
+        let t = len2 > 0 ? ((x - x0) * sx + (y - y0) * sy) / len2 : 0;
+        t = Math.max(0, Math.min(1, t));
+        const dx = x - (x0 + sx * t);
+        const dy = y - (y0 + sy * t);
+        if (dx * dx + dy * dy <= r2) {
+          this.materials[idx] = CONFIG.MAT_AIR;
+          modified = true;
+        }
+      }
+    }
+
+    if (modified) {
+      this.dirtCtx.save();
+      this.dirtCtx.globalCompositeOperation = 'destination-out';
+      this.dirtCtx.lineCap = 'round';
+      this.dirtCtx.lineWidth = r * 2;
+      this.dirtCtx.beginPath();
+      this.dirtCtx.moveTo(x0, y0);
+      this.dirtCtx.lineTo(x1 + 0.01, y1);
+      this.dirtCtx.stroke();
+      this.dirtCtx.restore();
+    }
+    return modified;
+  }
+
+  /** Turns air & dirt inside a circle into acid (alchemist flask) and repaints the area. */
+  public addAcid(cx: number, cy: number, r: number) {
+    cx = Math.round(cx);
+    cy = Math.round(cy);
+    r = Math.round(r);
+    const minX = Math.max(0, cx - r);
+    const maxX = Math.min(this.width - 1, cx + r);
+    const minY = Math.max(0, cy - r);
+    const maxY = Math.min(this.height - 1, cy + r);
+    const w = maxX - minX + 1;
+    const h = maxY - minY + 1;
+    if (w <= 0 || h <= 0) return;
+
+    const dirtImg = this.dirtCtx.getImageData(minX, minY, w, h);
+    const acidImg = this.acidCtx.getImageData(minX, minY, w, h);
+    const r2 = r * r;
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        const dx = x - cx;
+        const dy = y - cy;
+        const idx = y * this.width + x;
+        if (dx * dx + dy * dy > r2 || this.materials[idx] === CONFIG.MAT_ROCK) continue;
+        this.materials[idx] = CONFIG.MAT_ACID;
+        const p = ((y - minY) * w + (x - minX)) * 4;
+        dirtImg.data[p + 3] = 0;
+        this.paintAcidPixel(acidImg.data, p, Math.random);
+      }
+    }
+    this.dirtCtx.putImageData(dirtImg, minX, minY);
+    this.acidCtx.putImageData(acidImg, minX, minY);
   }
 
   /** Stains a blood splat onto the dirt canvas (purely visual). */
@@ -709,30 +752,76 @@ export class Terrain {
   // ══════════════════════════════════════════════════════════════════════════
 
   /**
-   * Finds a valid spawn coordinate: open air, solid ground beneath,
-   * and not adjacent to any acid cells.
+   * Finds a spawn point: free space for a wizard, solid (non-acid) ground below,
+   * preferably far from the other wizards.
    */
-  public findSpawnPoint(): { x: number; y: number } {
-    const border = 30;
+  public findSpawnPoint(avoid: { x: number; y: number }[] = []): { x: number; y: number } {
+    const border = 24;
+    let best: { x: number; y: number } | null = null;
+    let bestScore = -Infinity;
 
-    for (let attempts = 0; attempts < 300; attempts++) {
-      const x = border + Math.random() * (this.width - 2 * border);
-      const y = border + Math.random() * (this.height - 2 * border);
+    for (let attempts = 0, found = 0; attempts < 400 && found < 12; attempts++) {
+      const x = Math.round(border + Math.random() * (this.width - 2 * border));
+      const startY = Math.round(border + Math.random() * (this.height - 2 * border));
+      if (this.isSolid(x, startY)) continue;
 
-      if (!this.isSolid(x, y) && !this.isSolid(x, y - 10)) {
-        // Trace down to find the floor
-        for (let checkY = y; checkY < this.height - border; checkY += 2) {
-          if (this.isSolid(x, checkY)) {
-            // Reject positions touching or above acid
-            if (this.isAcid(x, checkY) || this.isAcid(x, checkY - 10)) continue;
-            return { x, y: checkY - 8 };
-          }
+      // Trace down to the floor
+      let floorY = -1;
+      for (let y = startY; y < this.height - border; y++) {
+        if (this.isSolid(x, y)) { floorY = y; break; }
+      }
+      if (floorY < 0 || this.isAcid(x, floorY)) continue;
+
+      const sy = floorY - 6;
+      // Enough room for the body (12 px tall, 10 px wide) and no acid nearby
+      let clear = true;
+      for (let dy = -6; dy <= 4 && clear; dy += 2) {
+        for (let dx = -5; dx <= 5; dx += 5) {
+          if (this.isSolid(x + dx, sy + dy)) { clear = false; break; }
         }
+      }
+      if (!clear) continue;
+      if (this.isAcid(x - 6, floorY + 1) || this.isAcid(x + 6, floorY + 1)) continue;
+
+      found++;
+      let score = 0;
+      if (avoid.length > 0) {
+        score = Math.min(...avoid.map(a => Math.hypot(a.x - x, a.y - sy)));
+      }
+      score += Math.random() * 20;
+      if (score > bestScore) {
+        bestScore = score;
+        best = { x, y: sy };
       }
     }
 
-    // Fallback: horizontal centre, upper quarter
-    return { x: this.width / 2, y: this.height / 4 };
+    return best ?? { x: this.width / 2, y: this.height / 4 };
+  }
+
+  // ── Network snapshot (players joining a match in progress) ───────────────
+
+  /** Run-length encodes the material grid as [material, runLength(1..255)] byte pairs. */
+  public encodeMaterials(): Uint8Array {
+    const out: number[] = [];
+    const m = this.materials;
+    let i = 0;
+    while (i < m.length) {
+      const v = m[i];
+      let run = 1;
+      while (i + run < m.length && m[i + run] === v && run < 255) run++;
+      out.push(v, run);
+      i += run;
+    }
+    return new Uint8Array(out);
+  }
+
+  public loadMaterials(rle: Uint8Array) {
+    let p = 0;
+    for (let i = 0; i + 1 < rle.length && p < this.materials.length; i += 2) {
+      this.materials.fill(rle[i], p, Math.min(this.materials.length, p + rle[i + 1]));
+      p += rle[i + 1];
+    }
+    this.renderInitialCanvases(Math.random);
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -744,7 +833,7 @@ export class Terrain {
    * array.  Called once after map generation; dirt canvas is then mutated by
    * carveCircle / addBlood at runtime.
    */
-  private renderInitialCanvases(rand: () => number = Math.random) {
+  private renderInitialCanvases(rand: () => number) {
     this.dirtCtx.clearRect(0, 0, this.width, this.height);
     this.rockCtx.clearRect(0, 0, this.width, this.height);
     this.acidCtx.clearRect(0, 0, this.width, this.height);
@@ -781,12 +870,7 @@ export class Terrain {
           rockData[pixIdx + 3] = 255;
 
         } else if (mat === CONFIG.MAT_ACID) {
-          // Toxic bright-green with slight luminance noise
-          const noise = (rand() - 0.5);
-          acidData[pixIdx]     = Math.max(0, Math.min(255, Math.floor(20)));
-          acidData[pixIdx + 1] = Math.max(0, Math.min(255, Math.floor(220 + noise * 35)));
-          acidData[pixIdx + 2] = Math.max(0, Math.min(255, Math.floor(20  + noise * 20)));
-          acidData[pixIdx + 3] = 255;
+          this.paintAcidPixel(acidData, pixIdx, rand);
         }
       }
     }
@@ -794,6 +878,15 @@ export class Terrain {
     this.dirtCtx.putImageData(dirtImgData, 0, 0);
     this.rockCtx.putImageData(rockImgData, 0, 0);
     this.acidCtx.putImageData(acidImgData, 0, 0);
+  }
+
+  /** Toxic bright-green with slight luminance noise */
+  private paintAcidPixel(data: Uint8ClampedArray, p: number, rand: () => number) {
+    const noise = rand() - 0.5;
+    data[p] = 20;
+    data[p + 1] = Math.floor(220 + noise * 35);
+    data[p + 2] = Math.floor(20 + noise * 20);
+    data[p + 3] = 255;
   }
 
   /**

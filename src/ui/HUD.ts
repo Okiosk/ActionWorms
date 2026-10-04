@@ -1,203 +1,170 @@
+import { CONFIG } from '../config';
 import { Game } from '../engine/Game';
-import { Worm } from '../engine/Worm';
+import { sound } from '../engine/SoundEffects';
 
+function esc(str: string): string {
+  return str.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+}
+
+/** In-game overlay: objective, kill feed, scoreboard and the local wizard's status. */
 export class HUD {
-  private container: HTMLElement;
-  private p1Name: HTMLElement;
-  private p1HpBar: HTMLElement;
-  private p1HpText: HTMLElement;
-  private p1AmmoText: HTMLElement;
-  private p1WeaponName: HTMLElement;
-  private p1Money: HTMLElement;
-  private p1Frags: HTMLElement;
-  private p1ColorDot: HTMLElement;
-
-  private scoreboardEl: HTMLElement;
-  private killFeedEl: HTMLElement;
-  private killFeedTimeout: number | null = null;
-  private netBadgeEl: HTMLElement;
-  private matchRuleBadgeEl: HTMLElement;
+  private root: HTMLElement;
+  private objective: HTMLElement;
+  private killfeed: HTMLElement;
+  private scoreboard: HTMLElement;
+  private status: HTMLElement;
+  private hpFill: HTMLElement;
+  private hpVal: HTMLElement;
+  private weaponIcon: HTMLElement;
+  private weaponName: HTMLElement;
+  private ammo: HTMLElement;
+  private reloadFill: HTMLElement;
+  private money: HTMLElement;
+  private net: HTMLElement;
+  private lastScoreHtml = '';
 
   constructor(container: HTMLElement) {
-    this.container = container;
-    this.container.innerHTML = `
-      <div class="hud-top">
-        <!-- Local Player HUD (Left) -->
-        <div class="hud-player p1-hud">
-          <div class="hud-row">
-            <span class="hud-player-dot" id="hud-p1-dot"></span>
-            <span class="hud-name" id="hud-p1-name">Moi</span>
-            <div class="hud-bar-bg">
-              <div class="hud-bar-fill" id="hud-p1-hp" style="width: 100%;"></div>
-            </div>
-            <span class="hud-hp-val" id="hud-p1-hp-text">100</span>
-            <span class="hud-frags" id="hud-p1-frags">🏆 0</span>
-          </div>
-          <div class="hud-weapon-row">
-            <span class="hud-weapon-active" id="hud-p1-weapon">Boule de Feu</span>
-            <span class="hud-ammo-val" id="hud-p1-ammo">● 1/1</span>
-            <span class="hud-money-val" id="hud-p1-money" style="margin-left: 12px; color: #ffd740; font-family: 'Press Start 2P', monospace; font-size: 10px;">✨ 100</span>
-          </div>
+    this.root = container;
+    const hud = document.createElement('div');
+    hud.className = 'hud';
+    hud.innerHTML = `
+      <div class="hud-tools">
+        <button class="hud-box icon-btn" id="hud-mute" title="Son (M)">🔊</button>
+        <button class="hud-box icon-btn" id="hud-fs" title="Plein écran (F11)">⛶</button>
+        <div class="hud-box net-pill" id="hud-net"><span class="led"></span><span></span></div>
+      </div>
+      <div class="hud-box hud-objective" id="hud-objective"></div>
+      <div class="killfeed" id="hud-killfeed"></div>
+      <div class="hud-box scoreboard" id="hud-scoreboard"></div>
+      <div class="hud-box status-box" id="hud-status">
+        <div class="hp-row">
+          <span>❤️</span>
+          <div class="bar"><div id="hud-hp"></div></div>
+          <span class="hp-val" id="hud-hp-val"></span>
         </div>
-
-        <!-- Center: Kill Feed, Net Badge & Rule Banner -->
-        <div class="hud-center">
-          <div class="hud-killfeed" id="hud-killfeed"></div>
-          <div class="hud-net-badge" id="hud-net-badge" style="display:none;"></div>
-          <div class="hud-rule-badge" id="hud-rule-badge"></div>
-          <button class="btn-fullscreen" id="btn-toggle-fullscreen" title="Plein Écran">⛶ Plein Écran</button>
+        <div class="weapon-row">
+          <span id="hud-wicon"></span>
+          <span class="wname" id="hud-wname"></span>
+          <span class="ammo" id="hud-ammo"></span>
         </div>
-
-        <!-- Multi-player Leaderboard (Right, up to 7 opponents) -->
-        <div class="hud-scoreboard" id="hud-scoreboard"></div>
+        <div class="reload"><div id="hud-reload"></div></div>
+        <div class="money" id="hud-money"></div>
       </div>
     `;
+    container.appendChild(hud);
 
-    this.container.querySelector('#btn-toggle-fullscreen')?.addEventListener('click', () => {
-      if (!document.fullscreenElement) {
-        document.documentElement.requestFullscreen().catch(() => {});
-      } else {
-        document.exitFullscreen().catch(() => {});
-      }
+    const q = (id: string) => hud.querySelector(id) as HTMLElement;
+    this.objective = q('#hud-objective');
+    this.killfeed = q('#hud-killfeed');
+    this.scoreboard = q('#hud-scoreboard');
+    this.status = q('#hud-status');
+    this.hpFill = q('#hud-hp');
+    this.hpVal = q('#hud-hp-val');
+    this.weaponIcon = q('#hud-wicon');
+    this.weaponName = q('#hud-wname');
+    this.ammo = q('#hud-ammo');
+    this.reloadFill = q('#hud-reload');
+    this.money = q('#hud-money');
+    this.net = q('#hud-net');
+
+    const muteBtn = q('#hud-mute');
+    const syncMute = () => { muteBtn.textContent = sound.enabled ? '🔊' : '🔇'; };
+    syncMute();
+    muteBtn.addEventListener('click', () => { sound.toggleMuted(); syncMute(); });
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'KeyM' && !(e.target instanceof HTMLInputElement)) { sound.toggleMuted(); syncMute(); }
+    });
+    q('#hud-fs').addEventListener('click', () => {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+      else document.exitFullscreen().catch(() => {});
     });
 
-    this.p1Name = this.container.querySelector('#hud-p1-name')!;
-    this.p1ColorDot = this.container.querySelector('#hud-p1-dot')!;
-    this.p1HpBar = this.container.querySelector('#hud-p1-hp')!;
-    this.p1HpText = this.container.querySelector('#hud-p1-hp-text')!;
-    this.p1AmmoText = this.container.querySelector('#hud-p1-ammo')!;
-    this.p1WeaponName = this.container.querySelector('#hud-p1-weapon')!;
-    this.p1Money = this.container.querySelector('#hud-p1-money')!;
-    this.p1Frags = this.container.querySelector('#hud-p1-frags')!;
-
-    this.scoreboardEl = this.container.querySelector('#hud-scoreboard')!;
-    this.killFeedEl = this.container.querySelector('#hud-killfeed')!;
-    this.netBadgeEl = this.container.querySelector('#hud-net-badge')!;
-    this.matchRuleBadgeEl = this.container.querySelector('#hud-rule-badge')!;
+    this.setVisible(false);
   }
 
-  public showKill(killer: string, victim: string) {
-    this.killFeedEl.textContent = `${killer} 💥 ${victim}`;
-    this.killFeedEl.classList.add('visible');
+  public setVisible(visible: boolean) {
+    this.root.classList.toggle('hidden', !visible);
+  }
 
-    if (this.killFeedTimeout) clearTimeout(this.killFeedTimeout);
-    this.killFeedTimeout = window.setTimeout(() => {
-      this.killFeedEl.classList.remove('visible');
-    }, 2500);
+  public clearKills() {
+    this.killfeed.innerHTML = '';
+  }
+
+  public showKill(killer: string | null, victim: string, cause?: 'acid' | 'self') {
+    const line = document.createElement('div');
+    line.className = 'kill';
+    if (killer) line.innerHTML = `<b>${esc(killer)}</b> ✦ ${esc(victim)}`;
+    else if (cause === 'acid') line.innerHTML = `<b>${esc(victim)}</b> s'est dissous dans l'acide`;
+    else line.innerHTML = `<b>${esc(victim)}</b> s'est fait exploser`;
+    this.killfeed.prepend(line);
+    while (this.killfeed.children.length > 4) this.killfeed.lastElementChild?.remove();
+    setTimeout(() => line.classList.add('fade'), 4000);
+    setTimeout(() => line.remove(), 4500);
   }
 
   public update(game: Game) {
-    if (!game.isRunning || game.worms.length === 0) return;
-
-    // Network Diagnostics HUD
-    this.netBadgeEl.style.display = 'block';
-    const now = performance.now();
-    const timeSinceLastPacket = now - game.net.lastPacketTime;
-    const isStalled = game.net.isConnected && game.net.lastPacketTime > 0 && timeSinceLastPacket > 1500;
-
-    if (!game.net.isConnected) {
-      this.netBadgeEl.style.background = 'rgba(200, 30, 30, 0.8)';
-      this.netBadgeEl.style.color = '#fff';
-      this.netBadgeEl.textContent = '🔴 Déconnecté';
-    } else if (isStalled) {
-      this.netBadgeEl.style.background = 'rgba(220, 150, 10, 0.85)';
-      this.netBadgeEl.style.color = '#fff';
-      this.netBadgeEl.textContent = `🟡 En attente de l'hôte (${Math.round(timeSinceLastPacket / 1000)}s)...`;
-    } else if (game.mode === 'online_host') {
-      const ping = game.net.pingMs ? `${game.net.pingMs}ms` : '<1ms';
-      this.netBadgeEl.style.background = 'rgba(20, 140, 40, 0.8)';
-      this.netBadgeEl.style.color = '#fff';
-      this.netBadgeEl.textContent = `🟢 Hôte P2P | ${game.worms.length}/8 Sorciers | Ping: ${ping}`;
-    } else {
-      const ping = game.net.pingMs ? `${game.net.pingMs}ms` : '<1ms';
-      this.netBadgeEl.style.background = 'rgba(20, 140, 40, 0.8)';
-      this.netBadgeEl.style.color = '#fff';
-      this.netBadgeEl.textContent = `🟢 Client P2P | ${game.worms.length}/8 Sorciers | Ping: ${ping}`;
-    }
-
-    // Match Rules Banner
     const mods = game.modifiers;
-    let ruleText = `Objectif: ${game.fragLimit} Victoires`;
-    if (mods.gravity === 0.35) ruleText += ` • 🌙 Gravité Lunaire`;
-    if (mods.gravity === 0.0) ruleText += ` • 🚀 Lévitation Totale`;
-    if (mods.ropeReach === 'infinite') ruleText += ` • ♾️ Lien Infini`;
-    if (mods.unlimitedAmmo) ruleText += ` • 💥 Sorts Illimités`;
-    if (mods.wormSpeed === 1.5) ruleText += ` • 🔥 Célérité`;
-    // KOTH score indicator
-    if (mods.gameMode === 'koth' && (game as any).kothScores) {
-      const scores = (game as any).kothScores as number[];
-      ruleText = `👑 KOTH | 🔴 ${scores[0]} - ${scores[1]} 🔵 | Objectif: ${game.fragLimit}`;
-    }
-    this.matchRuleBadgeEl.textContent = ruleText;
+    const local = game.getLocalWorm();
 
-    // Identify local player
-    const p1 = game.getLocalWorm() || game.worms[0];
-
-    if (p1) {
-      const myTeam = mods.gameMode === 'teams' ? (mods.teams[p1.id] === 0 ? ' 🔴' : ' 🔵') : '';
-      this.p1Name.textContent = `${p1.name}${myTeam}`;
-      this.p1ColorDot.style.background = p1.color;
-
-      // HP Bar
-      const maxHp = p1.maxHealth || 100;
-      const hpPct = Math.max(0, Math.min(100, (p1.health / maxHp) * 100));
-      this.p1HpBar.style.width = `${hpPct}%`;
-      this.p1HpBar.className = `hud-bar-fill ${hpPct < 30 ? 'critical' : hpPct < 60 ? 'warning' : ''}`;
-      this.p1HpText.textContent = `${Math.ceil(p1.health)}`;
-      this.p1Frags.textContent = `🏆 ${p1.frags}`;
-
-      // Current Weapon, Ammo & Money
-      const curWep = p1.getCurrentWeapon();
-      this.p1WeaponName.textContent = `${curWep.icon} ${curWep.name}`;
-      this.p1Money.textContent = `✨ ${p1.money}`;
-
-      if (p1.modifiers.unlimitedAmmo) {
-        this.p1AmmoText.textContent = `● ∞`;
-        this.p1AmmoText.style.color = '#44ffaa';
-      } else if (p1.clipReloadCooldown > 0) {
-        this.p1AmmoText.textContent = `⏳ Incantation...`;
-        this.p1AmmoText.style.color = '#ffaa33';
-      } else {
-        this.p1AmmoText.textContent = `● ${p1.clipAmmo} / ${curWep.clipSize}`;
-        this.p1AmmoText.style.color = '#ffffff';
-      }
-    }
-
-    // Opponents Scoreboard (All worms except local player)
-    const opponents = game.worms.filter(w => w !== p1);
-    if (opponents.length > 0) {
-      this.scoreboardEl.style.display = 'flex';
-      let scoreHtml = '';
-      for (const opp of opponents) {
-        const maxHp = opp.maxHealth || 100;
-        const hpPct = Math.max(0, Math.min(100, (opp.health / maxHp) * 100));
-        const team = mods.gameMode === 'teams' ? (mods.teams[opp.id] === 0 ? ' 🔴' : ' 🔵') : '';
-        scoreHtml += `
-          <div class="scoreboard-row">
-            <span class="score-dot" style="background:${opp.color}"></span>
-            <span class="score-name">${this.escapeHtml(opp.name)}${team}</span>
-            <div class="score-bar-bg">
-              <div class="score-bar-fill ${hpPct < 30 ? 'critical' : hpPct < 60 ? 'warning' : ''}" style="width:${hpPct}%"></div>
-            </div>
-            <span class="score-hp">${Math.ceil(opp.health)}</span>
-            <span class="score-frags">🏆 ${opp.frags}</span>
-          </div>
-        `;
-      }
-      if (this.scoreboardEl.innerHTML !== scoreHtml) {
-        this.scoreboardEl.innerHTML = scoreHtml;
-      }
+    // Objective / score
+    if (mods.gameMode === 'teams') {
+      const [r, b] = game.teamScores;
+      this.objective.innerHTML = `<span class="t0">Rouge ${r}</span> — <span class="t1">${b} Bleu</span> · objectif ${mods.fragLimit}`;
+    } else if (mods.gameMode === 'koth') {
+      const goal = mods.fragLimit * CONFIG.KOTH_SECONDS_PER_POINT;
+      const mine = local ? Math.floor(local.score / 60) : 0;
+      this.objective.textContent = `👑 Tiens la zone centrale seul · toi : ${mine} / ${goal} s`;
     } else {
-      this.scoreboardEl.style.display = 'none';
+      this.objective.textContent = `⚔️ Premier à ${mods.fragLimit} frags`;
     }
-  }
 
-  private escapeHtml(str: string): string {
-    return str
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
+    // Network status
+    const netText = this.net.lastElementChild as HTMLElement;
+    const stalled = game.role === 'client' && performance.now() - game.net.lastPacketTime > 1500;
+    this.net.classList.toggle('bad', !game.net.isConnected);
+    this.net.classList.toggle('warn', game.net.isConnected && stalled);
+    if (!game.net.isConnected) netText.textContent = 'Déconnecté';
+    else if (stalled) netText.textContent = "L'hôte ne répond pas…";
+    else if (game.role === 'host' && game.net.guestCount === 0) netText.textContent = 'Seul dans le salon';
+    else netText.textContent = game.net.pingMs ? `${game.net.pingMs} ms` : 'Connecté';
+
+    // Scoreboard
+    const koth = mods.gameMode === 'koth';
+    const html = game.getStandings().map(w => {
+      const team = mods.gameMode === 'teams' ? CONFIG.TEAM_COLORS[game.teamOf(w.id)] : null;
+      const val = koth ? `${Math.floor(w.score / 60)} s` : `${w.frags}`;
+      return `<div class="sb-row ${w === local ? 'me' : ''} ${w.isAlive() ? '' : 'dead'}">
+        <span class="dot" style="background:${w.color};color:${team ?? w.color}"></span>
+        <span class="name">${esc(w.name)}</span>
+        <span class="val">${val}</span>
+      </div>`;
+    }).join('');
+    if (html !== this.lastScoreHtml) {
+      this.scoreboard.innerHTML = html;
+      this.lastScoreHtml = html;
+    }
+
+    // Local wizard
+    this.status.style.display = local && local.isAlive() ? '' : 'none';
+    if (!local || !local.isAlive()) return;
+    const pct = Math.max(0, Math.min(100, (local.health / local.maxHealth) * 100));
+    this.hpFill.style.width = `${pct}%`;
+    this.hpFill.className = pct < 30 ? 'crit' : pct < 60 ? 'warn' : '';
+    this.hpVal.textContent = String(Math.ceil(local.health));
+
+    const w = local.weapon;
+    this.weaponIcon.textContent = w.icon;
+    this.weaponName.textContent = w.name;
+    if (mods.unlimitedAmmo) {
+      this.ammo.textContent = '∞';
+      this.reloadFill.style.width = local.shotCooldown > 0 ? `${100 - (local.shotCooldown / w.reloadTime) * 100}%` : '100%';
+    } else if (local.clipReloadCooldown > 0) {
+      this.ammo.textContent = 'Recharge…';
+      this.reloadFill.style.width = `${100 - (local.clipReloadCooldown / w.clipReloadTime) * 100}%`;
+    } else {
+      this.ammo.textContent = `${local.clipAmmo} / ${w.clipSize}`;
+      this.reloadFill.style.width = local.shotCooldown > 0 ? `${100 - (local.shotCooldown / w.reloadTime) * 100}%` : '100%';
+    }
+    this.money.textContent = `✨ ${local.money} or`;
   }
 }

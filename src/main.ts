@@ -1,11 +1,10 @@
 import { Game } from './engine/Game';
 import { GameTicker } from './engine/GameTicker';
+import { EMPTY_INPUT } from './engine/Worm';
 import { NetworkManager } from './net/NetworkManager';
 import { HUD } from './ui/HUD';
 import { LobbyUI, normalizeRoomId } from './ui/LobbyUI';
 import { ShopUI } from './ui/ShopUI';
-import { WeaponId } from './weapons/WeaponDef';
-import { DEFAULT_LOADOUT } from './weapons/WeaponRegistry';
 
 window.addEventListener('DOMContentLoaded', () => {
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -16,198 +15,161 @@ window.addEventListener('DOMContentLoaded', () => {
   const game = new Game(canvas, net);
   const hud = new HUD(hudContainer);
   const shop = new ShopUI(hudContainer);
+  if (import.meta.env.DEV) Object.assign(window, { game, net }); // console debugging
 
-  (window as any).game = game;
-  (window as any).net = net;
+  // ── Menus ────────────────────────────────────────────────────────────────
+  let joinRetry: number | null = null;
+  const stopJoinRetry = () => {
+    if (joinRetry !== null) clearInterval(joinRetry);
+    joinRetry = null;
+  };
 
-  let currentLoadout: WeaponId[] = [...DEFAULT_LOADOUT];
-
-  // Track raw mouse screen position (world coords computed per-frame via screenToWorld)
-  let mouseScreenX = 0;
-  let mouseScreenY = 0;
-
-  window.addEventListener('mousemove', (e) => {
-    mouseScreenX = e.clientX;
-    mouseScreenY = e.clientY;
+  const menu = new LobbyUI(menuContainer, game, {
+    onHost: async (name) => {
+      const code = await net.hostRoom();
+      game.openHostLobby(name);
+      return code;
+    },
+    onJoin: async (code, name) => {
+      game.prepareClient();
+      await net.joinRoom(code);
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          stopJoinRetry();
+          reject(new Error("L'hôte ne répond pas."));
+        }, 8000);
+        game.onWelcome = () => {
+          clearTimeout(timeout);
+          stopJoinRetry();
+          game.onWelcome = undefined;
+          resolve();
+        };
+        const sendJoin = () => net.broadcast({ type: 'JOIN', name });
+        sendJoin();
+        joinRetry = window.setInterval(sendJoin, 700);
+      });
+    },
+    onLeave: () => {
+      stopJoinRetry();
+      game.leave();
+      shop.hide();
+      hud.setVisible(false);
+      history.replaceState(null, '', location.pathname + location.search);
+    }
   });
 
-  let isMouseDownLeft = false;
-  let isMouseDownRight = false;
+  game.onLobbyUpdate = () => menu.refreshLobby();
 
-  // Prevent right-click context menu on canvas
-  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  game.onMatchStart = () => {
+    menu.hide();
+    hud.clearKills();
+    hud.setVisible(true);
+  };
 
-  window.addEventListener('mousedown', (e) => {
-    if (e.button === 0) isMouseDownLeft = true;
-    if (e.button === 2) isMouseDownRight = true;
-  });
+  game.onLocalDeath = (worm) => {
+    shop.show(worm, (weaponId) => game.chooseWeapon(weaponId));
+  };
 
-  window.addEventListener('mouseup', (e) => {
-    if (e.button === 0) isMouseDownLeft = false;
-    if (e.button === 2) isMouseDownRight = false;
-  });
+  game.onKill = (killer, victim, cause) => hud.showKill(killer, victim, cause);
 
-  // Keyboard state tracking (supports AZERTY and QWERTY)
+  game.onMatchOver = (result) => {
+    shop.hide();
+    menu.showGameOver(result);
+  };
+
+  game.onReturnToLobby = () => {
+    shop.hide();
+    hud.setVisible(false);
+    menu.showLobby();
+  };
+
+  game.onDisconnected = () => {
+    shop.hide();
+    hud.setVisible(false);
+    menu.showDisconnected();
+  };
+
+  // ── Input ────────────────────────────────────────────────────────────────
+  let mouseX = 0;
+  let mouseY = 0;
+  let mouseLeft = false;
+  let mouseRight = false;
   const keys: Record<string, boolean> = {};
 
-  window.addEventListener('keydown', (e) => {
-    keys[e.code] = true;
+  window.addEventListener('mousemove', (e) => {
+    mouseX = e.clientX;
+    mouseY = e.clientY;
   });
+  canvas.addEventListener('mousedown', (e) => {
+    if (e.button === 0) mouseLeft = true;
+    if (e.button === 2) mouseRight = true;
+  });
+  window.addEventListener('mouseup', (e) => {
+    if (e.button === 0) mouseLeft = false;
+    if (e.button === 2) mouseRight = false;
+  });
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
+  const typing = (e: KeyboardEvent) => e.target instanceof HTMLInputElement;
+  window.addEventListener('keydown', (e) => {
+    if (typing(e)) return;
+    keys[e.code] = true;
+    if (game.isInMatch() && ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+      e.preventDefault();
+    }
+    if (e.code === 'Escape' && game.phase === 'playing') {
+      if (menu.currentScreen === 'pause') menu.hide();
+      else if (menu.currentScreen === 'hidden') menu.showPause();
+    }
+  });
   window.addEventListener('keyup', (e) => {
     keys[e.code] = false;
   });
+  // Releasing keys while the window is unfocused would leave them stuck
+  window.addEventListener('blur', () => {
+    for (const k of Object.keys(keys)) keys[k] = false;
+    mouseLeft = mouseRight = false;
+  });
 
-  function processLocalInputs() {
-    if (!game.isRunning || game.worms.length === 0) return;
-
-    const localWorm = game.getLocalWorm();
-
-    // Mouse Aim Angle: convert screen pixels → world coords via camera transform
-    let p1AimAngle: number | undefined = undefined;
-    if (localWorm && localWorm.isAlive()) {
-      const world = game.screenToWorld(mouseScreenX, mouseScreenY);
-      p1AimAngle = Math.atan2(world.y - localWorm.y, world.x - localWorm.x);
+  function readInput() {
+    const local = game.getLocalWorm();
+    const blocked = shop.isVisible() || menu.currentScreen !== 'hidden';
+    if (!local || !local.isAlive() || blocked) {
+      game.localInput = { ...EMPTY_INPUT };
+      return;
     }
-
-    // Local Player Input (WASD / ZQSD / Arrow keys + Mouse)
-    game.localP1Input = {
-      left: !!(keys['KeyA'] || keys['KeyQ'] || keys['ArrowLeft']),
-      right: !!(keys['KeyD'] || keys['ArrowRight']),
-      up: !!(keys['KeyW'] || keys['KeyZ'] || keys['ArrowUp']),
-      down: !!(keys['KeyS'] || keys['ArrowDown']),
-      jump: !!(keys['KeyW'] || keys['KeyZ'] || keys['Space'] || keys['ArrowUp']),
-      fire: isMouseDownLeft || !!keys['KeyF'] || !!keys['Enter'],
-      rope: isMouseDownRight || !!keys['KeyE'] || !!keys['ShiftLeft'] || !!keys['ShiftRight'],
-      aimAngle: p1AimAngle
+    const world = game.screenToWorld(mouseX, mouseY);
+    game.localInput = {
+      left: !!(keys.KeyA || keys.KeyQ || keys.ArrowLeft),
+      right: !!(keys.KeyD || keys.ArrowRight),
+      up: !!(keys.KeyW || keys.KeyZ || keys.ArrowUp),
+      down: !!(keys.KeyS || keys.ArrowDown),
+      jump: !!(keys.KeyW || keys.KeyZ || keys.Space || keys.ArrowUp),
+      fire: mouseLeft || !!keys.KeyF,
+      rope: mouseRight || !!keys.KeyE || !!keys.ShiftLeft || !!keys.ShiftRight,
+      aimAngle: Math.atan2(world.y - local.y, world.x - local.x)
     };
   }
 
-  // Setup Lobby UI
-  const lobby = new LobbyUI(menuContainer, {
-    onHostOnline: async (name, loadout, modifiers) => {
-      currentLoadout = loadout;
-      const roomId = await net.hostRoom();
-      game.initMatch('online_host', loadout, name, modifiers);
-      return roomId;
-    },
-    onJoinOnline: async (rawRoomId, name, loadout) => {
-      const roomId = normalizeRoomId(rawRoomId);
-      currentLoadout = loadout;
-      await net.joinRoom(roomId);
-      game.initMatch('online_client', loadout, name);
+  // ── Loops ────────────────────────────────────────────────────────────────
+  // Fixed 60 Hz simulation in a worker timer (keeps running in background tabs)
+  new GameTicker(() => {
+    readInput();
+    game.update();
+  }).start();
 
-      // Return a Promise that resolves when WELCOME is received from Host
-      return new Promise<void>((resolve, reject) => {
-        let welcomeReceived = false;
-
-        const timeout = setTimeout(() => {
-          if (!welcomeReceived) {
-            reject(new Error('Délai dépassé (8s) : L\'hôte n\'a pas répondu au handshake.'));
-          }
-        }, 8000);
-
-        game.onWelcomeReceived = () => {
-          welcomeReceived = true;
-          clearTimeout(timeout);
-          resolve();
-        };
-
-        const sendJoin = () => {
-          if (!welcomeReceived && net.isConnected) {
-            net.broadcast({
-              type: 'JOIN',
-              name,
-              loadout
-            });
-            setTimeout(sendJoin, 300);
-          }
-        };
-        sendJoin();
-      });
-    },
-    onStartMatch: () => {
-      game.startHostMatch();
-    },
-    onModifierChanged: (mods) => {
-      game.setModifiers(mods);
-    },
-    onRematch: () => {
-      if (game.mode === 'online_host') {
-        game.startHostMatch();
-      }
-    },
-    onReturnToMenu: () => {
-      game.isRunning = false;
-      net.close();
-    }
-  });
-
-  // Callbacks from Game Engine & Network
-  game.onLobbyUpdate = (players, modifiers) => {
-    lobby.updateLobbyState(players, modifiers);
-  };
-
-  game.onStartMatchReceived = (_modifiers) => {
-    lobby.hide();
-  };
-
-  game.onKillFeed = (killer, victim) => {
-    hud.showKill(killer, victim);
-  };
-
-  game.onMatchEnd = (winner) => {
-    const isP1Winner = winner.id === net.myPeerId;
-    lobby.showGameOverModal(winner.name, isP1Winner);
-  };
-
-  // 🛒 Shop: open when local worm dies or before first spawn, spawn immediately upon weapon confirmation!
-  game.onLocalWormDied = (worm) => {
-    shop.show(worm, (weaponId: WeaponId) => {
-      game.selectWeaponAndRespawn(worm.id, weaponId);
-    });
-  };
-
-  // Check URL hash for direct room invite: #room=liero-xyz
-  const hash = window.location.hash;
-  if (hash.includes('room=')) {
-    const targetRoom = normalizeRoomId(hash);
-    if (targetRoom) {
-      lobby.showConnectingModal(targetRoom);
-    }
-  }
-
-  // Unthrottled 60Hz physics and network ticker
-  const ticker = new GameTicker(() => {
-    if (game.isRunning) {
-      if (!shop.isVisible()) {
-        processLocalInputs();
-      } else {
-        game.localP1Input = {
-          left: false,
-          right: false,
-          up: false,
-          down: false,
-          jump: false,
-          fire: false,
-          rope: false
-        };
-      }
-      game.update();
-      shop.tick();
-    }
-  });
-  ticker.start();
-
-  // Rendering loop (runs on requestAnimationFrame, decoupled from physics)
-  function renderLoop() {
-    if (game.isRunning) {
-      game.updateCamera(); // smooth camera follow (render-rate, not physics-rate)
-      game.render();
+  // Rendering at the display refresh rate, interpolated between ticks
+  const renderLoop = (now: number) => {
+    if (game.isInMatch()) {
+      game.render(now);
       hud.update(game);
     }
     requestAnimationFrame(renderLoop);
-  }
-
+  };
   requestAnimationFrame(renderLoop);
+
+  // ── Start ────────────────────────────────────────────────────────────────
+  const invite = normalizeRoomId(location.hash.includes('room=') ? location.hash : '');
+  if (invite) menu.join(invite);
+  else menu.showMainMenu();
 });

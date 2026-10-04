@@ -1,29 +1,29 @@
 export const CONFIG = {
-  // Logical game resolution (authentic retro DOS Liero feel, sharp 16:10)
+  // Logical world size (pixels)
   MAP_WIDTH: 800,
   MAP_HEIGHT: 500,
 
-  // Physics constants (tuned for agile, responsive movement & slingshot swings)
+  // Simulation runs at a fixed 60 ticks per second
+  TICK_MS: 1000 / 60,
+
+  // Physics constants (per tick)
   GRAVITY: 0.14,
-  AIR_FRICTION: 0.992,
   GROUND_FRICTION: 0.72,
-  WORM_SPEED: 0.45,
+  WORM_WALK_SPEED: 1.2,
   WORM_JUMP_FORCE: 2.8,
-  DIG_RADIUS: 5,
-  DIG_SPEED_FACTOR: 0.65,
   MAX_FALL_SPEED: 5.5,
 
   // Rope constants
-  ROPE_SPEED: 14.5,
   ROPE_MAX_LENGTH: 220,
-  ROPE_PULL_FORCE: 0.40,
-  ROPE_DAMPING: 0.995,
+  ROPE_MIN_LENGTH: 12,
+  ROPE_HOOK_SPEED: 14,
+  ROPE_REEL_SPEED: 1.6,
+  ROPE_MAX_SWING_SPEED: 6.5,
 
   // Game rules
   MAX_PLAYERS: 8,
-  DEFAULT_FRAG_LIMIT: 10,
-  RESPAWN_DELAY_FRAMES: 90, // ~1.5s at 60fps
-  DEFAULT_HEALTH: 100,
+  KOTH_SECONDS_PER_POINT: 12, // King of the hill: fragLimit × 12 s in the zone to win
+  KOTH_ZONE_RADIUS: 40,
 
   // Materials
   MAT_AIR: 0,
@@ -31,41 +31,26 @@ export const CONFIG = {
   MAT_ROCK: 2,
   MAT_ACID: 3,
 
-  // 8 Distinct Player Colors & Names
+  // 8 distinct player colors
   PLAYER_COLORS: [
-    '#44cc44', // 1: Green
-    '#3388ff', // 2: Blue
-    '#ff4444', // 3: Red
-    '#ffcc22', // 4: Yellow
-    '#b844ff', // 5: Purple
-    '#ff8822', // 6: Orange
-    '#22e8dd', // 7: Cyan
-    '#ff44aa'  // 8: Pink
+    '#44cc44', // Vert
+    '#3388ff', // Bleu
+    '#ff4444', // Rouge
+    '#ffcc22', // Jaune
+    '#b844ff', // Violet
+    '#ff8822', // Orange
+    '#22e8dd', // Cyan
+    '#ff44aa'  // Rose
   ],
 
-  PLAYER_COLOR_NAMES: [
-    'Vert',
-    'Bleu',
-    'Rouge',
-    'Jaune',
-    'Violet',
-    'Orange',
-    'Cyan',
-    'Rose'
-  ],
+  TEAM_COLORS: ['#ff5566', '#4499ff'],
+  TEAM_NAMES: ['Rouge', 'Bleu'],
 
-  // Palettes (Authentic Liero colors)
   COLORS: {
     SKY: '#160d08',
     DIRT_BASE: '#784d28',
     DIRT_DARK: '#5c391c',
-    DIRT_LIGHT: '#996335',
-    ROCK_BASE: '#4a4d52',
-    ROCK_DARK: '#333539',
-    ROCK_LIGHT: '#64686e',
     BLOOD_FRESH: '#bb1111',
-    BLOOD_DARK: '#770909',
-    WORM_P1: '#44cc44', // Green
-    WORM_P2: '#3388ff'  // Blue
+    BLOOD_DARK: '#770909'
   }
 };

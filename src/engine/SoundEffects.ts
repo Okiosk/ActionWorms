@@ -1,13 +1,27 @@
 export class SoundEffects {
   private ctx: AudioContext | null = null;
   private noiseBuffer: AudioBuffer | null = null;
-  public enabled: boolean = true;
+  public enabled: boolean = SoundEffects.loadEnabled();
   public volume: number = 0.5;
   private spellBuffers: (AudioBuffer | null)[] = [null, null, null, null, null];
   private isPreloading: boolean = false;
 
-  constructor() {
-    // Lazily initialized on first user gesture
+  private static loadEnabled(): boolean {
+    try {
+      return localStorage.getItem('arcane_worms_muted') !== '1';
+    } catch {
+      return true;
+    }
+  }
+
+  public toggleMuted(): boolean {
+    this.enabled = !this.enabled;
+    try {
+      localStorage.setItem('arcane_worms_muted', this.enabled ? '0' : '1');
+    } catch {
+      // storage unavailable — keep the in-memory value
+    }
+    return this.enabled;
   }
 
   private initCtx() {
@@ -25,7 +39,7 @@ export class SoundEffects {
   private preloadSpellSounds() {
     if (this.isPreloading || !this.ctx) return;
     this.isPreloading = true;
-    const base = (import.meta as any).env?.BASE_URL || './';
+    const base = import.meta.env.BASE_URL;
     for (let i = 1; i <= 5; i++) {
       const idx = i - 1;
       const url = `${base}assets/audio/spell${i}.ogg`;
@@ -198,29 +212,6 @@ export class SoundEffects {
     osc.stop(t + 0.07);
   }
 
-  public playLaser() {
-    if (!this.enabled) return;
-    this.initCtx();
-    if (!this.ctx) return;
-
-    const t = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(1800, t);
-    osc.frequency.exponentialRampToValueAtTime(80, t + 0.2);
-
-    gain.gain.setValueAtTime(0.4 * this.volume, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
-
-    osc.connect(gain);
-    gain.connect(this.ctx.destination);
-
-    osc.start(t);
-    osc.stop(t + 0.2);
-  }
-
   public playRopeShoot() {
     if (!this.enabled) return;
     this.initCtx();
@@ -265,31 +256,6 @@ export class SoundEffects {
 
     osc.start(t);
     osc.stop(t + 0.06);
-  }
-
-  public playDig() {
-    if (!this.enabled) return;
-    this.initCtx();
-    if (!this.ctx || !this.noiseBuffer) return;
-
-    const t = this.ctx.currentTime;
-    const noise = this.ctx.createBufferSource();
-    noise.buffer = this.noiseBuffer;
-
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(320 + Math.random() * 80, t);
-
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.18 * this.volume, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
-
-    noise.connect(filter);
-    filter.connect(gain);
-    gain.connect(this.ctx.destination);
-
-    noise.start(t);
-    noise.stop(t + 0.06);
   }
 
   public playHurt() {

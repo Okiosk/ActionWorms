@@ -210,24 +210,17 @@ export class ParticleManager {
 
   public draw(ctx: CanvasRenderingContext2D) {
     for (const p of this.particles) {
-      const alpha = Math.min(1.0, p.life / (p.maxLife * 0.4));
-      ctx.save();
-      ctx.globalAlpha = alpha;
+      ctx.globalAlpha = Math.min(1.0, p.life / (p.maxLife * 0.4));
       ctx.fillStyle = p.color;
-
-      if (p.type === 'smoke') {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (p.type === 'spark' || p.type === 'fire') {
+      if (p.type === 'spark' || p.type === 'fire') {
         ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
       } else {
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
         ctx.fill();
       }
-      ctx.restore();
     }
+    ctx.globalAlpha = 1;
   }
 
   public clear() {

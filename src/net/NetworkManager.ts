@@ -10,314 +10,209 @@ const PEER_CONFIG = {
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
       { urls: 'stun:stun2.l.google.com:19302' },
-      { urls: 'stun:stun3.l.google.com:19302' },
-      { urls: 'stun:stun4.l.google.com:19302' },
-      { urls: 'stun:stun.services.mozilla.com' },
       { urls: 'stun:global.stun.twilio.com:3478' }
-    ],
-    iceCandidatePoolSize: 10
+    ]
   }
 };
 
+const MAX_GUESTS = 7;
+const JOIN_TIMEOUT_MS = 12000;
+
+/** WebRTC star topology through PeerJS: the host relays nothing, it is the authority. */
 export class NetworkManager {
   private peer: Peer | null = null;
-  private connections: Map<string, DataConnection> = new Map();
+  private connections = new Map<string, DataConnection>();
   private hostConnection: DataConnection | null = null;
 
   public role: NetRole = 'offline';
   public myPeerId: string = '';
   public isConnected: boolean = false;
   public pingMs: number = 0;
-  public packetsReceivedPerSec: number = 0;
   public lastPacketTime: number = 0;
-
-  private packetCountWindow: number = 0;
-  private statInterval: number | null = null;
   private pingInterval: number | null = null;
 
-  // Callbacks
   public onMessageReceived: ((msg: NetMessage, fromId: string) => void) | null = null;
-  public onPeerJoined: ((peerId: string) => void) | null = null;
   public onPeerLeft: ((peerId: string) => void) | null = null;
-  public onConnected: ((peerId: string) => void) | null = null;
-  public onError: ((err: string) => void) | null = null;
 
-  // Host: Create a Room
-  public async hostRoom(roomId?: string): Promise<string> {
+  /** Host: create a room. Resolves with the room code. */
+  public hostRoom(): Promise<string> {
     this.close();
     this.role = 'host';
+    const id = 'liero-' + Math.random().toString(36).substring(2, 8);
 
     return new Promise((resolve, reject) => {
-      // Auto-generate clean 6-character room id in lowercase
-      const id = (roomId || 'liero-' + Math.random().toString(36).substring(2, 8)).toLowerCase();
+      const peer = new Peer(id, PEER_CONFIG);
+      this.peer = peer;
+      let opened = false;
 
-      try {
-        this.peer = new Peer(id, PEER_CONFIG);
+      peer.on('open', (assignedId) => {
+        opened = true;
+        this.myPeerId = assignedId;
+        this.isConnected = true;
+        this.startPing();
+        resolve(assignedId);
+      });
 
-        this.peer.on('open', (assignedId) => {
-          this.myPeerId = assignedId;
-          this.isConnected = true;
-          this.onConnected?.(assignedId);
-          resolve(assignedId);
-        });
+      peer.on('connection', (conn) => this.setupHostConnection(conn));
 
-        this.peer.on('connection', (conn) => {
-          this.setupHostConnection(conn);
-        });
+      // Lost the signalling server (idle tab, network blip): reconnect so new players can still join
+      peer.on('disconnected', () => {
+        if (this.peer === peer && !peer.destroyed) peer.reconnect();
+      });
 
-        this.peer.on('error', (err) => {
-          console.error('PeerJS error:', err);
-          let errText = err.message || 'Erreur réseau';
-          if (err.type === 'unavailable-id') {
-            errText = 'Identifiant de salon déjà utilisé, réessayez.';
-          }
-          this.onError?.(errText);
-          reject(new Error(errText));
-        });
-      } catch (err: unknown) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        this.onError?.(errorMsg);
-        reject(err);
-      }
+      peer.on('error', (err) => {
+        console.error('PeerJS error:', err);
+        if (!opened) {
+          reject(new Error(err.type === 'unavailable-id'
+            ? 'Code de salon déjà utilisé, réessayez.'
+            : 'Impossible de contacter le serveur de connexion (' + err.type + ').'));
+        }
+      });
     });
   }
 
-  // Client: Join a Room
-  public async joinRoom(targetRoomId: string): Promise<void> {
+  /** Client: connect to a room. */
+  public joinRoom(roomId: string): Promise<void> {
     this.close();
     this.role = 'client';
-
-    const cleanTarget = targetRoomId.toLowerCase().trim();
+    const target = roomId.toLowerCase().trim();
 
     return new Promise((resolve, reject) => {
-      let timeoutId: number | null = null;
-      let isSettled = false;
+      let settled = false;
+      const fail = (message: string) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        this.close();
+        reject(new Error(message));
+      };
+      const timeoutId = window.setTimeout(
+        () => fail("Délai dépassé : impossible de joindre l'hôte. Vérifiez le code."),
+        JOIN_TIMEOUT_MS
+      );
 
-      // 12-second timeout to prevent infinite spinner
-      timeoutId = window.setTimeout(() => {
-        if (!isSettled) {
-          isSettled = true;
-          this.close();
-          const err = new Error('Délai dépassé (12s) : Impossible de joindre l\'hôte. Vérifiez le code.');
-          this.onError?.(err.message);
-          reject(err);
-        }
-      }, 12000);
+      const peer = new Peer(PEER_CONFIG);
+      this.peer = peer;
 
-      try {
-        this.peer = new Peer(PEER_CONFIG);
+      peer.on('open', (id) => {
+        this.myPeerId = id;
+        const conn = peer.connect(target, { reliable: true });
+        this.hostConnection = conn;
 
-        this.peer.on('open', (id) => {
-          this.myPeerId = id;
-          // Connect using native standard WebRTC DataChannel (reliable & ordered SCTP by default)
-          const conn = this.peer!.connect(cleanTarget);
-          this.hostConnection = conn;
-
-          conn.on('open', () => {
-            if (!isSettled) {
-              isSettled = true;
-              if (timeoutId) clearTimeout(timeoutId);
-              this.isConnected = true;
-              this.startMonitoring();
-              this.onConnected?.(cleanTarget);
-              resolve();
-            }
-          });
-
-          conn.on('data', (data) => {
-            this.handleIncomingMessage(data, cleanTarget);
-          });
-
-          conn.on('close', () => {
-            this.isConnected = false;
-            this.stopMonitoring();
-            this.onPeerLeft?.(cleanTarget);
-          });
-
-          conn.on('error', (err) => {
-            console.error('Connection error:', err);
-            if (!isSettled) {
-              isSettled = true;
-              if (timeoutId) clearTimeout(timeoutId);
-              this.onError?.('Impossible de rejoindre la partie.');
-              reject(err);
-            }
-          });
+        conn.on('open', () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
+          this.isConnected = true;
+          this.startPing();
+          resolve();
         });
-
-        this.peer.on('error', (err) => {
-          console.error('Peer error on client:', err);
-          if (!isSettled) {
-            isSettled = true;
-            if (timeoutId) clearTimeout(timeoutId);
-            let msg = 'Erreur de connexion : ' + err.type;
-            if (err.type === 'peer-unavailable') {
-              msg = `Le salon "${cleanTarget}" est introuvable. Assurez-vous que l'hôte a bien créé la partie.`;
-            }
-            this.onError?.(msg);
-            reject(new Error(msg));
-          }
+        conn.on('data', (data) => this.handleIncomingMessage(data as NetMessage, target));
+        conn.on('close', () => this.handleDisconnect(target));
+        conn.on('error', (err) => {
+          console.error('Connection error:', err);
+          fail('Impossible de rejoindre la partie.');
         });
-      } catch (err: unknown) {
-        if (timeoutId) clearTimeout(timeoutId);
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        this.onError?.(errorMsg);
-        reject(err);
-      }
+      });
+
+      peer.on('error', (err) => {
+        console.error('Peer error on client:', err);
+        if (settled) return;
+        fail(err.type === 'peer-unavailable'
+          ? `Le salon « ${target} » est introuvable. Vérifiez le code.`
+          : 'Erreur de connexion (' + err.type + ').');
+      });
     });
   }
 
   private setupHostConnection(conn: DataConnection) {
-    console.log('[NET HOST] Incoming connection from:', conn.peer, 'conn.open:', conn.open);
-    if (this.connections.size >= 7 && !this.connections.has(conn.peer)) {
-      console.warn('[NET HOST] Room is full (max 8 players), rejecting connection:', conn.peer);
+    if (this.connections.size >= MAX_GUESTS && !this.connections.has(conn.peer)) {
       conn.close();
       return;
     }
     this.connections.set(conn.peer, conn);
-
-    const onOpen = () => {
-      console.log('[NET HOST] Connection OPEN with:', conn.peer);
-      this.connections.set(conn.peer, conn);
-      this.startMonitoring();
-      this.onPeerJoined?.(conn.peer);
-    };
-
-    if (conn.open) {
-      onOpen();
-    } else {
-      conn.on('open', onOpen);
-    }
-
-    conn.on('data', (data) => {
-      if (!this.connections.has(conn.peer)) {
-        this.connections.set(conn.peer, conn);
-      }
-      this.handleIncomingMessage(data, conn.peer);
-    });
-
-    conn.on('close', () => {
-      console.log('[NET HOST] Connection CLOSED with:', conn.peer);
-      this.connections.delete(conn.peer);
-      if (this.connections.size === 0) {
-        this.stopMonitoring();
-      }
-      this.onPeerLeft?.(conn.peer);
-    });
-
+    conn.on('data', (data) => this.handleIncomingMessage(data as NetMessage, conn.peer));
+    conn.on('close', () => this.handleDisconnect(conn.peer));
     conn.on('error', (err) => {
-      console.error('[NET HOST] Connection ERROR with:', conn.peer, err);
-      this.connections.delete(conn.peer);
-      if (this.connections.size === 0) {
-        this.stopMonitoring();
-      }
-      this.onPeerLeft?.(conn.peer);
+      console.error('Connection error with', conn.peer, err);
+      this.handleDisconnect(conn.peer);
     });
   }
 
-  private handleIncomingMessage(rawMsg: unknown, fromId: string) {
-    const msg = rawMsg as NetMessage;
-    if (msg.type === 'JOIN' || msg.type === 'WELCOME' || msg.type === 'MATCH_OVER') {
-      console.log(`[NET RECV ${this.role}] type:`, msg.type, 'from:', fromId);
+  private handleDisconnect(peerId: string) {
+    if (this.role === 'offline') return; // we closed it ourselves
+    if (this.role === 'host') {
+      if (!this.connections.delete(peerId)) return;
+    } else {
+      this.isConnected = false;
     }
+    this.onPeerLeft?.(peerId);
+  }
+
+  private handleIncomingMessage(msg: NetMessage, fromId: string) {
     this.lastPacketTime = performance.now();
-    this.packetCountWindow++;
 
     if (msg.type === 'PING') {
-      if (this.role === 'host') {
-        this.sendTo(fromId, { type: 'PONG', time: msg.time });
-      } else {
-        this.broadcast({ type: 'PONG', time: msg.time });
-      }
+      this.sendTo(fromId, { type: 'PONG', time: msg.time });
       return;
     }
-
     if (msg.type === 'PONG') {
       this.pingMs = Math.max(1, Math.round(performance.now() - msg.time));
       return;
     }
-
     this.onMessageReceived?.(msg, fromId);
   }
 
-  private startMonitoring() {
-    this.stopMonitoring();
-
-    this.packetCountWindow = 0;
-    this.packetsReceivedPerSec = 0;
+  private startPing() {
+    this.stopPing();
     this.lastPacketTime = performance.now();
-
-    this.statInterval = window.setInterval(() => {
-      this.packetsReceivedPerSec = this.packetCountWindow;
-      this.packetCountWindow = 0;
-    }, 1000);
-
     this.pingInterval = window.setInterval(() => {
-      if (this.isConnected) {
-        this.broadcast({ type: 'PING', time: performance.now() });
-      }
-    }, 1200);
+      if (this.isConnected) this.broadcast({ type: 'PING', time: performance.now() });
+    }, 1500);
   }
 
-  private stopMonitoring() {
-    if (this.statInterval !== null) {
-      clearInterval(this.statInterval);
-      this.statInterval = null;
-    }
+  private stopPing() {
     if (this.pingInterval !== null) {
       clearInterval(this.pingInterval);
       this.pingInterval = null;
     }
   }
 
-  // Broadcast message from host to all clients or send to host
+  public get guestCount(): number {
+    return this.connections.size;
+  }
+
+  /** Host → all guests, or client → host */
   public broadcast(msg: NetMessage) {
     if (this.role === 'host') {
       for (const conn of this.connections.values()) {
-        if (conn && conn.open) {
-          conn.send(msg);
-        }
+        if (conn.open) conn.send(msg);
       }
-    } else if (this.role === 'client') {
-      if (this.hostConnection && this.hostConnection.open) {
-        this.hostConnection.send(msg);
-      }
+    } else if (this.role === 'client' && this.hostConnection?.open) {
+      this.hostConnection.send(msg);
     }
   }
 
   public sendTo(peerId: string, msg: NetMessage) {
-    const conn = this.connections.get(peerId);
-    if (!conn) {
-      console.warn(`[NET sendTo]: No connection found for peer ${peerId}`);
+    if (this.role === 'client') {
+      this.broadcast(msg);
       return;
     }
-    if (conn.open) {
-      conn.send(msg);
-    } else {
-      conn.on('open', () => {
-        conn.send(msg);
-      });
-    }
+    const conn = this.connections.get(peerId);
+    if (!conn) return;
+    if (conn.open) conn.send(msg);
+    else conn.on('open', () => conn.send(msg));
   }
 
   public close() {
-    for (const conn of this.connections.values()) {
-      conn.close();
-    }
-    this.connections.clear();
-
-    if (this.hostConnection) {
-      this.hostConnection.close();
-      this.hostConnection = null;
-    }
-
-    if (this.peer) {
-      this.peer.destroy();
-      this.peer = null;
-    }
-
     this.role = 'offline';
     this.isConnected = false;
-    this.stopMonitoring();
+    this.stopPing();
+    for (const conn of this.connections.values()) conn.close();
+    this.connections.clear();
+    this.hostConnection?.close();
+    this.hostConnection = null;
+    this.peer?.destroy();
+    this.peer = null;
   }
 }
