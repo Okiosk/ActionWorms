@@ -8,12 +8,13 @@ export const WEAPON_REGISTRY: Record<WeaponId, WeaponDef> = {
   bazooka: {
     id: 'bazooka',
     name: 'Boule de Feu',
-    description: 'Sphère incendiaire qui explose à l\'impact. Le sort de base, fiable et polyvalent.',
+    description: 'Sphère incendiaire qui explose à l\'impact et brûle le bois. Le sort de base, fiable et polyvalent.',
     icon: '🔥',
     price: 0,
     reloadTime: 38, clipSize: 1, clipReloadTime: 40,
     projectileSpeed: 6.8, spread: 0.02, damage: 48, craterRadius: 20,
     bounces: 0, fuseFrames: 180, gravityScale: 0.25,
+    fire: true,
     elementColor: '#ff5500', spellSchool: 'Pyromancie'
   },
   minigun: {
@@ -52,12 +53,12 @@ export const WEAPON_REGISTRY: Record<WeaponId, WeaponDef> = {
   flamer: {
     id: 'flamer',
     name: 'Souffle du Dragon',
-    description: 'Flammes à courte portée qui montent et enflamment la cible : elle brûle pendant 3 s.',
+    description: 'Flammes à courte portée qui montent, enflamment la cible (3 s) et brûlent le bois. S\'éteignent dans l\'eau.',
     icon: '🐉',
     price: 75,
     reloadTime: 3, clipSize: 40, clipReloadTime: 70,
     projectileSpeed: 4.6, spread: 0.25, damage: 2, craterRadius: 2,
-    bounces: 0, fuseFrames: 32, gravityScale: -0.15, burnDuration: 180,
+    bounces: 0, fuseFrames: 32, gravityScale: -0.15, burnDuration: 180, fire: true,
     elementColor: '#ff3300', spellSchool: 'Draconique'
   },
   boomerang: {
@@ -151,7 +152,7 @@ export const WEAPON_REGISTRY: Record<WeaponId, WeaponDef> = {
   freeze_bomb: {
     id: 'freeze_bomb',
     name: 'Orbe de Givre',
-    description: 'Gèle sur place tous les sorciers proches pendant 3 secondes : ni mouvement, ni sort.',
+    description: 'Gèle les sorciers proches 3 s (ni mouvement, ni sort) et transforme l\'eau en glace.',
     icon: '❄️',
     price: 225,
     reloadTime: 50, clipSize: 1, clipReloadTime: 65,
@@ -189,7 +190,7 @@ export const WEAPON_REGISTRY: Record<WeaponId, WeaponDef> = {
     price: 300,
     reloadTime: 70, clipSize: 1, clipReloadTime: 80,
     projectileSpeed: 6.0, spread: 0.03, damage: 8, craterRadius: 4,
-    bounces: 0, fuseFrames: 150, gravityScale: 0.6, meteorCount: 5,
+    bounces: 0, fuseFrames: 150, gravityScale: 0.6, meteorCount: 5, fire: true,
     elementColor: '#ff7a1a', spellSchool: 'Cosmique'
   },
   railgun: {

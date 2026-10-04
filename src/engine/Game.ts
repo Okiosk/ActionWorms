@@ -14,7 +14,8 @@ import {
   ProjectileNetState,
   MatchModifiers,
   DEFAULT_MODIFIERS,
-  LobbyPlayerInfo
+  LobbyPlayerInfo,
+  KillCause
 } from '../net/Protocol';
 
 export type Role = 'host' | 'client';
@@ -30,6 +31,8 @@ export interface MatchResult {
 type StateMessage = Extract<NetMessage, { type: 'STATE' }>;
 
 const HOST_TIMEOUT_MS = 8000;
+/** Destroyed crystal pixels per gold coin (a cluster ≈ 100 px ≈ 20 gold) */
+const CRYSTAL_PIXELS_PER_GOLD = 5;
 const randomSeed = () => Math.floor(Math.random() * 1_000_000) + 1;
 
 /**
@@ -83,7 +86,7 @@ export class Game implements ProjectileWorld {
   public onMatchStart?: () => void;
   public onMatchOver?: (result: MatchResult) => void;
   public onReturnToLobby?: () => void;
-  public onKill?: (killer: string | null, victim: string, cause?: 'acid' | 'self') => void;
+  public onKill?: (killer: string | null, victim: string, cause?: KillCause) => void;
   /** The local wizard died (or the match starts): open the grimoire */
   public onLocalDeath?: (worm: Worm) => void;
   /** The connection to the host was lost */
@@ -510,17 +513,25 @@ export class Game implements ProjectileWorld {
       }
     }
 
-    // 2. Acid burns (10×/s)
+    // 2. Environment: acid corrodes, lava burns, water puts fires out (checked 10×/s)
     if (++this.acidTick >= 6) {
       this.acidTick = 0;
+      const t = this.terrain;
       for (const w of this.worms) {
         if (!w.isAlive()) continue;
-        const t = this.terrain;
+        const fluid = t.fluidAt(w.x, w.y);
+        if (fluid === CONFIG.MAT_WATER) {
+          w.burnTimer = 0;
+        } else if (fluid === CONFIG.MAT_LAVA || t.fluidAt(w.x, w.y + 5) === CONFIG.MAT_LAVA) {
+          w.burnTimer = Math.max(w.burnTimer, 120);
+          w.burnBy = 'lava';
+          this.damageWorm(w, 4, 0, -0.6, 'lava', true);
+          continue;
+        }
         if (t.isAcid(w.x, w.y + 6) || t.isAcid(w.x - 3, w.y + 6) || t.isAcid(w.x + 3, w.y + 6) ||
             t.isAcid(w.x - 6, w.y) || t.isAcid(w.x + 6, w.y)) {
-          w.takeDamage(3, 0, 0);
           this.particles.spawn(w.x + (Math.random() - 0.5) * 8, w.y + 4, (Math.random() - 0.5) * 0.5, -0.8, 'spark', '#44ff44', 1.5, 15);
-          if (!w.isAlive()) this.onWormKilled(w, 'acid');
+          this.damageWorm(w, 3, 0, 0, 'acid', true);
         }
       }
     }
@@ -589,7 +600,7 @@ export class Game implements ProjectileWorld {
     // Rempart: builds terrain instead of blasting it
     if (weapon.buildRadius) {
       const keep = this.worms.filter(w => w.isAlive()).flatMap(w => [q(w.x), q(w.y)]);
-      this.terrain.addDirt(x, y, weapon.buildRadius, keep);
+      this.terrain.addDirt(q(x), q(y), weapon.buildRadius, keep);
       this.emit({ t: 'fill', x: q(x), y: q(y), r: weapon.buildRadius, keep });
       this.particles.spawnExplosionFX(x, y, 8, '#c08040');
       sound.playGrenadeBounce();
@@ -597,8 +608,12 @@ export class Game implements ProjectileWorld {
     }
 
     const r = weapon.craterRadius * mods.explosionScale;
-    if (this.terrain.carveCircle(x, y, r)) {
-      this.emit({ t: 'crater', x: q(x), y: q(y), r: Math.round(r * 10) / 10 });
+    // Carve with exactly the (rounded) values sent to the clients so the terrains stay identical
+    const cr = Math.round(r * 10) / 10;
+    const carved = this.terrain.carveCircle(q(x), q(y), cr, !!weapon.fire);
+    if (carved.modified) {
+      this.emit({ t: 'crater', x: q(x), y: q(y), r: cr, ...(weapon.fire ? { f: 1 as const } : {}) });
+      this.crystalReward(x, y, carved.crystals, p.ownerId);
     }
 
     // Translocation: the caster appears where the orb stopped
@@ -674,6 +689,8 @@ export class Game implements ProjectileWorld {
     }
 
     if (weapon.freezeDuration) {
+      const ir = Math.round(r * 3);
+      if (this.terrain.freezeWater(q(x), q(y), ir)) this.emit({ t: 'ice', x: q(x), y: q(y), r: ir });
       for (const w of this.worms) {
         if (w.isAlive() && w.id !== p.ownerId && Math.hypot(w.x - x, w.y - y) <= r * 2.5) {
           w.freeze(weapon.freezeDuration);
@@ -683,7 +700,7 @@ export class Game implements ProjectileWorld {
 
     if (weapon.acidPool && mods.acidEnabled) {
       const ar = q(r + 5);
-      this.terrain.addAcid(x, y, ar);
+      this.terrain.addAcid(q(x), q(y), ar);
       this.emit({ t: 'acid', x: q(x), y: q(y), r: ar });
     }
 
@@ -747,11 +764,27 @@ export class Game implements ProjectileWorld {
   }
 
   public pierce(p: Projectile, x0: number, y0: number, x1: number, y1: number) {
-    const r = p.weapon.craterRadius * this.modifiers.explosionScale;
-    if (this.terrain.carveLine(x0, y0, x1, y1, r)) {
-      const q = (v: number) => Math.round(v);
-      this.emit({ t: 'line', x0: q(x0), y0: q(y0), x1: q(x1), y1: q(y1), r: Math.round(r * 10) / 10 });
+    const r = Math.round(p.weapon.craterRadius * this.modifiers.explosionScale * 10) / 10;
+    const fire = !!p.weapon.fire;
+    const q = Math.round;
+    const carved = this.terrain.carveLine(q(x0), q(y0), q(x1), q(y1), r, fire);
+    if (carved.modified) {
+      this.emit({ t: 'line', x0: q(x0), y0: q(y0), x1: q(x1), y1: q(y1), r, ...(fire ? { f: 1 as const } : {}) });
+      this.crystalReward(x1, y1, carved.crystals, p.ownerId);
     }
+  }
+
+  /** Breaking mana crystals: sparkles for everyone, gold for the caster (host). */
+  private crystalReward(x: number, y: number, crystals: number, ownerId: string) {
+    if (crystals <= 0) return;
+    for (let i = 0; i < Math.min(24, crystals / 3); i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 0.5 + Math.random() * 2;
+      this.particles.spawn(x, y, Math.cos(a) * sp, Math.sin(a) * sp - 1, 'spark', Math.random() < 0.5 ? '#d68cff' : '#ffffff', 2, 35);
+    }
+    if (this.role !== 'host') return;
+    const owner = this.worms.find(w => w.id === ownerId);
+    if (owner) owner.money += Math.ceil(crystals / CRYSTAL_PIXELS_PER_GOLD);
   }
 
   public bounce() {
@@ -768,7 +801,8 @@ export class Game implements ProjectileWorld {
     const self = attackerId === w.id;
     let dmg = damage;
     if (self && mods.noSelfDamage) dmg = 0;
-    if (!self && mods.gameMode === 'teams' && this.teamOf(attackerId) === this.teamOf(w.id)) dmg = 0;
+    const environment = attackerId === 'acid' || attackerId === 'lava';
+    if (!self && !environment && mods.gameMode === 'teams' && this.teamOf(attackerId) === this.teamOf(w.id)) dmg = 0;
     dmg = Math.round(dmg * mods.damageScale);
 
     w.takeDamage(dmg, kx, ky);
@@ -793,8 +827,8 @@ export class Game implements ProjectileWorld {
     sound.playDie();
 
     const killer = this.worms.find(k => k.id === attackerId);
-    let cause: 'acid' | 'self' | undefined;
-    if (attackerId === 'acid') cause = 'acid';
+    let cause: KillCause | undefined;
+    if (attackerId === 'acid' || attackerId === 'lava') cause = attackerId;
     else if (!killer || killer === victim) cause = 'self';
 
     const validKill = killer && killer !== victim;
@@ -903,10 +937,13 @@ export class Game implements ProjectileWorld {
   private applyEvent(ev: NetEvent) {
     switch (ev.t) {
       case 'crater':
-        this.terrain.carveCircle(ev.x, ev.y, ev.r);
+        this.crystalReward(ev.x, ev.y, this.terrain.carveCircle(ev.x, ev.y, ev.r, !!ev.f).crystals, '');
         break;
       case 'line':
-        this.terrain.carveLine(ev.x0, ev.y0, ev.x1, ev.y1, ev.r);
+        this.crystalReward(ev.x1, ev.y1, this.terrain.carveLine(ev.x0, ev.y0, ev.x1, ev.y1, ev.r, !!ev.f).crystals, '');
+        break;
+      case 'ice':
+        this.terrain.freezeWater(ev.x, ev.y, ev.r);
         break;
       case 'boom':
         this.explosionFX(ev.x, ev.y, ev.r, ev.c);
@@ -1155,6 +1192,7 @@ export class Game implements ProjectileWorld {
     for (const p of this.projectiles) p.draw(ctx, alpha);
     this.drawZaps(ctx);
     for (const w of this.worms) w.draw(ctx, alpha, w.id === this.localId);
+    this.terrain.drawLiquids(ctx, this.frame);
 
     ctx.restore();
     this.drawOffScreenIndicators();

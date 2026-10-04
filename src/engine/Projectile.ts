@@ -105,7 +105,19 @@ export class Projectile {
       this.resting = false;
     }
 
-    this.vy += CONFIG.GRAVITY * this.weapon.gravityScale;
+    // Water: fire spells fizzle out, everything else is slowed down
+    const inWater = terrain.fluidAt(this.x, this.y) === CONFIG.MAT_WATER;
+    if (inWater) {
+      if (this.weapon.id === 'flamer') {
+        this.alive = false;
+        particles.spawn(this.x, this.y, 0, -0.5, 'smoke', undefined, 2, 20);
+        return;
+      }
+      this.vx *= 0.94;
+      this.vy *= 0.94;
+    }
+
+    this.vy += CONFIG.GRAVITY * this.weapon.gravityScale * (inWater ? 0.3 : 1);
 
     if (this.weapon.homing && this.age > 15) this.steerTowards(this.findTarget(worms, 320), 0.11);
 
@@ -195,8 +207,13 @@ export class Projectile {
           this.resting = true;
           break;
         }
+        // Giant mushrooms send every spell back, without using up a bounce
+        if (terrain.materialAt(nx, ny) === CONFIG.MAT_BOUNCE) {
+          this.bounceOff(world, true);
+          break;
+        }
         if (this.weapon.bounces > 0) {
-          if (this.bounceOff(world)) break;
+          if (this.bounceOff(world, false)) break;
           this.detonate(world, null);
           return;
         }
@@ -217,26 +234,29 @@ export class Projectile {
    * Reflects off the terrain. Light contacts (rolling) don't use up a bounce; the spell
    * comes to rest once it is slow enough. Returns false when it should explode instead.
    */
-  private bounceOff(world: ProjectileWorld): boolean {
+  private bounceOff(world: ProjectileWorld, elastic: boolean): boolean {
     const { nx, ny } = this.findNormal(world.terrain);
     const dot = this.vx * nx + this.vy * ny;
     if (dot >= 0) return true; // already moving away from the surface
 
     const hardImpact = -dot > 1.2;
     if (hardImpact) {
-      if (this.bouncesLeft <= 0) return false;
-      this.bouncesLeft--;
+      if (!elastic) {
+        if (this.bouncesLeft <= 0) return false;
+        this.bouncesLeft--;
+      }
       world.bounce(this);
     }
 
-    const restitution = 0.55;
-    const friction = 0.85;
+    const restitution = elastic ? 1.0 : 0.55;
+    const friction = elastic ? 1.0 : 0.85;
     const tx = this.vx - dot * nx;
     const ty = this.vy - dot * ny;
     this.vx = tx * friction - dot * nx * restitution;
     this.vy = ty * friction - dot * ny * restitution;
 
-    if (!hardImpact && Math.hypot(this.vx, this.vy) < 0.6 && ny < -0.5) {
+    if (elastic && ny < -0.5) this.vy = Math.min(this.vy, -3); // springy mushroom cap
+    else if (!hardImpact && Math.hypot(this.vx, this.vy) < 0.6 && ny < -0.5) {
       this.vx = this.vy = 0;
       this.resting = true;
     }

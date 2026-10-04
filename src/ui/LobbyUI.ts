@@ -4,11 +4,12 @@ import { Terrain } from '../engine/Terrain';
 import { GameMode, MapType, MatchModifiers } from '../net/Protocol';
 
 const MAPS: Record<MapType, { name: string; icon: string; desc: string }> = {
-  cave: { name: 'Cavernes', icon: '🕳️', desc: 'Tunnels sinueux et grandes cavernes.' },
-  volcano: { name: 'Volcan', icon: '🌋', desc: "Lac d'acide, colonnes de roche et stalactites." },
-  swiss: { name: 'Gruyère', icon: '🧀', desc: 'Des dizaines de chambres rondes à creuser.' },
-  fortress: { name: 'Forteresse', icon: '🏰', desc: "Étages fortifiés et fossé d'acide." },
-  open: { name: 'Plein air', icon: '🌄', desc: 'Collines et îles flottantes.' }
+  cave: { name: 'Grottes', icon: '💎', desc: 'Cavernes organiques, lacs souterrains et filons de cristal à faire exploser pour de l\'or.' },
+  volcano: { name: 'Volcan', icon: '🌋', desc: 'Lac de lave, cône à percer jusqu\'à la cheminée de magma, ponts de bois inflammables.' },
+  forest: { name: 'Forêt', icon: '🌳', desc: 'Arbres géants, rivière, terriers et champignons-trampolines.' },
+  citadel: { name: 'Citadelle', icon: '🏰', desc: 'Deux châteaux symétriques, douves, pont-levis et salle au trésor.' },
+  glacier: { name: 'Glacier', icon: '🏔️', desc: 'Pentes de glace glissantes, lacs gelés et grottes de glace.' },
+  sky: { name: 'Archipel', icon: '☁️', desc: 'Îles flottantes au-dessus de l\'océan : grappin indispensable.' }
 };
 
 const MODES: { id: GameMode; name: string; desc: string }[] = [
@@ -30,7 +31,7 @@ const ADVANCED: Setting[] = [
   { key: 'regenRate', label: 'Régénération', options: [[0, 'Aucune'], [1, '1 PV/s'], [3, '3 PV/s']] },
   { key: 'unlimitedAmmo', label: 'Munitions', options: [[false, 'Normales'], [true, 'Illimitées']] },
   { key: 'noSelfDamage', label: 'Auto-dégâts', options: [[false, 'Oui'], [true, 'Non']] },
-  { key: 'acidEnabled', label: 'Acide', options: [[true, 'Oui'], [false, 'Non']] }
+  { key: 'acidEnabled', label: 'Acide et lave', options: [[true, 'Oui'], [false, 'Non']] }
 ];
 
 const FRAG_LIMITS = [5, 10, 15, 20, 30];
@@ -377,11 +378,7 @@ export class LobbyUI {
 
     const t = new Terrain();
     t.generateMap(mods.mapSeed, mods.mapType, mods.acidEnabled, zone);
-    ctx.fillStyle = CONFIG.COLORS.SKY;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    for (const layer of [t.dirtCanvas, t.rockCanvas, t.acidCanvas]) {
-      ctx.drawImage(layer, 0, 0, canvas.width, canvas.height);
-    }
+    t.drawPreview(ctx, canvas.width, canvas.height);
   }
 
   // ════════════════════════════════════════════════════════════════════════

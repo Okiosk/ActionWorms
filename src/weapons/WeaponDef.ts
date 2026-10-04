@@ -52,6 +52,7 @@ export interface WeaponDef {
   chainTargets?: number;    // lightning jumps to this many extra wizards
   meteorCount?: number;     // calls this many meteors from the sky where it lands
   shieldDuration?: number;  // self-cast: reflecting shield for this many ticks (no projectile)
+  fire?: boolean;           // fire spell: burns wood, fizzles in water
   elementColor: string;
   spellSchool: string;
 }

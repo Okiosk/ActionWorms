@@ -21,7 +21,7 @@ export interface MatchModifiers {
   regenRate: number;        // HP per second
   explosionScale: number;   // multiplies crater & blast radius
   noSelfDamage: boolean;
-  acidEnabled: boolean;
+  acidEnabled: boolean;     // hazards: acid pools and lava (otherwise lava becomes water)
 }
 
 export const DEFAULT_MODIFIERS: MatchModifiers = {
@@ -84,8 +84,9 @@ export interface ProjectileNetState {
 }
 
 export type NetEvent =
-  | { t: 'crater'; x: number; y: number; r: number }
-  | { t: 'line'; x0: number; y0: number; x1: number; y1: number; r: number }
+  | { t: 'crater'; x: number; y: number; r: number; f?: 1 }   // f = fire spell (burns wood)
+  | { t: 'line'; x0: number; y0: number; x1: number; y1: number; r: number; f?: 1 }
+  | { t: 'ice'; x: number; y: number; r: number }
   | { t: 'boom'; x: number; y: number; r: number; c?: string }
   | { t: 'acid'; x: number; y: number; r: number }
   | { t: 'blood'; x: number; y: number; n: number }
@@ -93,7 +94,9 @@ export type NetEvent =
   | { t: 'fill'; x: number; y: number; r: number; keep: number[] }
   | { t: 'tp'; x0: number; y0: number; x1: number; y1: number }
   | { t: 'zap'; pts: number[] }
-  | { t: 'kill'; killer: string | null; victim: string; cause?: 'acid' | 'self' };
+  | { t: 'kill'; killer: string | null; victim: string; cause?: KillCause };
+
+export type KillCause = 'acid' | 'lava' | 'self';
 
 export type NetMessage =
   | { type: 'JOIN'; name: string }

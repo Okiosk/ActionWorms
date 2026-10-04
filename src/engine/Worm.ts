@@ -170,7 +170,10 @@ export class Worm {
   /** Movement: aim, rope, walking, jumping, gravity and collisions. */
   private step(input: WormInput, terrain: Terrain, fx: WormFx | null) {
     this.grounded = this.blockedDown(terrain, this.x, this.y + 1);
-    const g = CONFIG.GRAVITY * this.modifiers.gravity;
+    const groundMat = this.grounded ? this.groundMaterial(terrain) : CONFIG.MAT_AIR;
+    const inFluid = terrain.fluidAt(this.x, this.y) !== 0;
+    // Liquids: strong buoyancy, the wizard sinks slowly
+    const g = CONFIG.GRAVITY * this.modifiers.gravity * (inFluid ? 0.2 : 1);
 
     // Frozen: no control at all, just fall and slide to a stop
     if (this.freezeTimer > 0) {
@@ -205,18 +208,40 @@ export class Worm {
     const walk = CONFIG.WORM_WALK_SPEED * speedMod;
     const moveDir = (input.left ? -1 : 0) + (input.right ? 1 : 0);
 
+    // Giant mushroom: trampoline (jump on it to go even higher)
+    if (groundMat === CONFIG.MAT_BOUNCE && !attached && this.vy >= 0) {
+      this.vy = -(input.jump ? CONFIG.BOUNCE_JUMP_FORCE : CONFIG.BOUNCE_FORCE);
+      this.grounded = false;
+    }
+
     this.applyGravity(g);
 
     if (this.grounded) {
-      if (Math.abs(this.vx) > walk * 1.5) {
+      const onIce = groundMat === CONFIG.MAT_ICE;
+      const top = onIce ? walk * 1.5 : walk;
+      if (Math.abs(this.vx) > top * 1.5) {
         // Sliding after a blast or a swing: keep the momentum, lose it progressively
-        this.vx *= 0.9;
+        this.vx *= onIce ? 0.99 : 0.9;
+      } else if (onIce) {
+        // Slippery: slow to accelerate, slow to stop
+        if (moveDir !== 0) this.vx = Math.max(-top, Math.min(top, this.vx + moveDir * 0.07 * speedMod));
+        this.vx *= 0.985;
       } else {
         if (moveDir !== 0) {
           this.vx = Math.max(-walk, Math.min(walk, this.vx + moveDir * 0.32 * speedMod));
         }
-        this.vx *= CONFIG.GROUND_FRICTION;
+        this.vx *= inFluid ? 0.6 : CONFIG.GROUND_FRICTION;
       }
+    } else if (inFluid && !attached) {
+      // Swimming: up/jump to rise, everything is slowed down
+      if (moveDir !== 0 && this.vx * moveDir < walk * 0.8) this.vx += moveDir * 0.1 * speedMod;
+      if (input.up || input.jump) {
+        // At the surface, a stroke leaps out of the water
+        const atSurface = terrain.fluidAt(this.x, this.y - HEAD - 1) === 0;
+        this.vy = atSurface && input.jump ? -CONFIG.WORM_JUMP_FORCE * 0.9 : this.vy - 0.24;
+      }
+      this.vx *= 0.9;
+      this.vy *= 0.9;
     } else if (attached) {
       // Pump the swing
       if (moveDir !== 0) this.vx += moveDir * 0.12 * speedMod;
@@ -242,6 +267,17 @@ export class Worm {
     if (this.rope.isAttached()) this.applyRopeVelocityConstraint();
 
     this.resolvePhysics(terrain);
+  }
+
+  /** Material the wizard stands on (centre first, then the feet corners). */
+  private groundMaterial(t: Terrain): number {
+    for (const dx of [0, -3, 3]) {
+      const m = t.materialAt(this.x + dx, this.y + FEET + 0.5);
+      if (t.isSolid(this.x + dx, this.y + FEET + 0.5)) return m;
+      const m2 = t.materialAt(this.x + dx, this.y + FEET + 1.5);
+      if (t.isSolid(this.x + dx, this.y + FEET + 1.5)) return m2;
+    }
+    return CONFIG.MAT_AIR;
   }
 
   /** Overrides the "rope button held" memory (used when re-syncing with the host). */

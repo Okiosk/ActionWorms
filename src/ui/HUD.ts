@@ -1,6 +1,7 @@
 import { CONFIG } from '../config';
 import { Game } from '../engine/Game';
 import { sound } from '../engine/SoundEffects';
+import { KillCause } from '../net/Protocol';
 
 function esc(str: string): string {
   return str.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -90,11 +91,12 @@ export class HUD {
     this.killfeed.innerHTML = '';
   }
 
-  public showKill(killer: string | null, victim: string, cause?: 'acid' | 'self') {
+  public showKill(killer: string | null, victim: string, cause?: KillCause) {
     const line = document.createElement('div');
     line.className = 'kill';
     if (killer) line.innerHTML = `<b>${esc(killer)}</b> ✦ ${esc(victim)}`;
     else if (cause === 'acid') line.innerHTML = `<b>${esc(victim)}</b> s'est dissous dans l'acide`;
+    else if (cause === 'lava') line.innerHTML = `<b>${esc(victim)}</b> a fondu dans la lave`;
     else line.innerHTML = `<b>${esc(victim)}</b> s'est fait exploser`;
     this.killfeed.prepend(line);
     while (this.killfeed.children.length > 4) this.killfeed.lastElementChild?.remove();

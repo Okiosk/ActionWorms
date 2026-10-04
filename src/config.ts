@@ -27,9 +27,17 @@ export const CONFIG = {
 
   // Materials
   MAT_AIR: 0,
-  MAT_DIRT: 1,
-  MAT_ROCK: 2,
-  MAT_ACID: 3,
+  MAT_DIRT: 1,     // destructible
+  MAT_ROCK: 2,     // indestructible
+  MAT_ACID: 3,     // solid, corrodes wizards standing on it
+  MAT_ICE: 4,      // destructible, slippery
+  MAT_WATER: 5,    // liquid: slows everything, puts out fire, freezes into ice
+  MAT_CRYSTAL: 6,  // destructible, breaking it gives gold
+  MAT_WOOD: 7,     // resists explosions, but fire burns it entirely
+  MAT_LAVA: 8,     // liquid: sets wizards on fire
+  MAT_BOUNCE: 9,   // giant mushroom: bounces wizards and spells
+  BOUNCE_FORCE: 5.0,
+  BOUNCE_JUMP_FORCE: 6.2,
 
   // 8 distinct player colors
   PLAYER_COLORS: [

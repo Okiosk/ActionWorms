@@ -25,8 +25,33 @@ Aucun serveur de jeu : l'hôte simule la partie et l'envoie aux autres joueurs 6
 ## Modes et options (choisis par l'hôte)
 
 - **Mêlée** (chacun pour soi), **Équipes** (Rouge contre Bleu, pas de tir ami) ou **Colline** (rester seul dans la zone centrale).
-- 5 cartes générées (Cavernes, Volcan, Gruyère, Forteresse, Plein air) avec aperçu exact dans le salon.
-- Options avancées : gravité, portée du grappin, vitesse, points de vie, dégâts, taille des explosions, régénération, munitions illimitées, auto-dégâts, acide.
+- 6 cartes générées avec aperçu exact dans le salon (bouton « Autre carte » pour une variante).
+- Options avancées : gravité, portée du grappin, vitesse, points de vie, dégâts, taille des explosions, régénération, munitions illimitées, auto-dégâts, acide et lave.
+
+## Cartes
+
+| Carte | Ambiance |
+|---|---|
+| 💎 Grottes | Cavernes organiques, lacs souterrains, filons de cristal |
+| 🌋 Volcan | Lac de lave, cône à percer jusqu'à la cheminée de magma, ponts de bois inflammables |
+| 🌳 Forêt | Arbres géants, rivière, terriers, champignons-trampolines |
+| 🏰 Citadelle | Deux châteaux symétriques, douves, pont-levis, salles au trésor |
+| 🏔️ Glacier | Pentes de glace glissantes, lacs gelés, grottes de glace |
+| ☁️ Archipel | Îles flottantes au-dessus de l'océan |
+
+## Matériaux
+
+| Matériau | Effet |
+|---|---|
+| Terre | Destructible |
+| Roche | Indestructible |
+| Acide | Ronge les sorciers qui marchent dessus |
+| 🧊 Glace | Destructible et **glissante** |
+| 💧 Eau | Ralentit tout, on y nage (saut pour en sortir), éteint le feu ; l'Orbe de Givre la gèle |
+| 🌋 Lave | Liquide qui **enflamme** et blesse |
+| 💎 Cristal | Destructible ; le faire exploser **rapporte de l'or** |
+| 🪵 Bois | Résiste aux explosions, mais les sorts de **feu** le brûlent entièrement |
+| 🍄 Champignon | Trampoline : fait rebondir les sorciers (saut = plus haut) et renvoie les sorts |
 
 ## Sorts
 
@@ -68,7 +93,8 @@ Ouvre l'URL locale dans plusieurs onglets pour tester le multijoueur. Le déploi
 
 - `src/engine/Game.ts` — boucle de jeu, logique hôte/client, réseau, rendu
 - `src/engine/Worm.ts`, `NinjaRope.ts`, `Projectile.ts` — physique du sorcier, du grappin et des sorts
-- `src/engine/Terrain.ts` — génération des cartes, terrain destructible
+- `src/engine/Terrain.ts` — terrain destructible multi-matériaux et son rendu
+- `src/engine/MapGenerator.ts` — génération des 6 cartes
 - `src/net/` — connexion PeerJS et format des messages
 - `src/ui/` — menus et salon, HUD, grimoire
 - `src/weapons/WeaponRegistry.ts` — réglages des sorts
