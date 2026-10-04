@@ -189,10 +189,9 @@ void main() {
   }
   col /= wsum;
 
-  // Blood decals on destructible materials
-  vec4 stain = texture(uStain, uv);
-  float soft = (wd + wi + wc + ww + wb) / wsum;
-  col = mix(col, stain.rgb, stain.a * 0.85 * soft);
+  // Blood decals (premultiplied: no dark fringe when filtered), slightly glossy on top surfaces
+  vec4 stain = texture(uStain, uv) * 0.92;
+  col = col * (1.0 - stain.a) + stain.rgb * (1.0 + exposedTop * 0.35);
 
   // Rim: dark outline on the edges, light catching the top surfaces
   float rim = smoothstep(0.5, 0.92, total);
@@ -336,7 +335,9 @@ export class TerrainGL {
         gl.bindTexture(gl.TEXTURE_2D, this.bgTex);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, t.bgCanvas);
         gl.bindTexture(gl.TEXTURE_2D, this.stainTex);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, t.stainCanvas);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
         const canopy = new Uint8Array(W);
         if (t.canopyLine) for (let x = 0; x < W; x++) canopy[x] = Math.max(0, Math.min(255, Math.round(t.canopyLine[x] / 2)));
         gl.bindTexture(gl.TEXTURE_2D, this.canopyTex);
@@ -353,17 +354,21 @@ export class TerrainGL {
     if (changed) this.uploadMasks(t, changed === 'all' ? { x0: 0, y0: 0, x1: W - 1, y1: H - 1 } : changed);
 
     if (this.pass === 'solid') {
-      const stained = t.stains.since(this.stainSeq);
+      const stained = t.stains.listSince(this.stainSeq);
       this.stainSeq = t.stains.seq;
-      if (stained) {
-        const r = stained === 'all' ? { x0: 0, y0: 0, x1: W - 1, y1: H - 1 } : stained;
-        const x0 = Math.max(0, r.x0), y0 = Math.max(0, r.y0);
-        const x1 = Math.min(W - 1, r.x1), y1 = Math.min(H - 1, r.y1);
-        if (x1 >= x0 && y1 >= y0) {
-          const img = t.stainCanvas.getContext('2d')!.getImageData(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
-          gl.bindTexture(gl.TEXTURE_2D, this.stainTex);
+      const rects = stained === 'all' ? [{ x0: 0, y0: 0, x1: W - 1, y1: H - 1 }] : stained;
+      if (rects.length > 0) {
+        const sctx = t.stainCanvas.getContext('2d')!;
+        gl.bindTexture(gl.TEXTURE_2D, this.stainTex);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+        for (const r of rects) {
+          const x0 = Math.max(0, r.x0), y0 = Math.max(0, r.y0);
+          const x1 = Math.min(W - 1, r.x1), y1 = Math.min(H - 1, r.y1);
+          if (x1 < x0 || y1 < y0) continue;
+          const img = sctx.getImageData(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
           gl.texSubImage2D(gl.TEXTURE_2D, 0, x0, y0, gl.RGBA, gl.UNSIGNED_BYTE, img);
         }
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
       }
     }
   }

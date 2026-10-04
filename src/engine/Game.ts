@@ -1,7 +1,8 @@
 import { CONFIG } from '../config';
 import { Terrain } from './Terrain';
 import { TerrainGL } from './TerrainGL';
-import { Worm, WormInput, EMPTY_INPUT, WormFx } from './Worm';
+import { Worm, WormInput, EMPTY_INPUT, WormFx, WIZARD_FOOT, WIZARD_HEIGHT, FROZEN_ROBE } from './Worm';
+import { drawWizard, animFrames, prepareWizards } from './Sprites';
 import { Projectile, ProjectileWorld } from './Projectile';
 import { ParticleManager } from './Particles';
 import { sound } from './SoundEffects';
@@ -32,6 +33,10 @@ export interface MatchResult {
 type StateMessage = Extract<NetMessage, { type: 'STATE' }>;
 
 const HOST_TIMEOUT_MS = 8000;
+/** How long a fallen wizard stays on the ground */
+const CORPSE_MS = 4000;
+
+interface Corpse { x: number; y: number; vx: number; vy: number; facing: number; color: string; born: number }
 /** Destroyed crystal pixels per gold coin (a cluster ≈ 100 px ≈ 20 gold) */
 const CRYSTAL_PIXELS_PER_GOLD = 5;
 const randomSeed = () => Math.floor(Math.random() * 1_000_000) + 1;
@@ -76,6 +81,8 @@ export class Game implements ProjectileWorld {
   private shakeTime = 0;
   private shakeIntensity = 0;
   private zaps: { pts: number[]; life: number }[] = [];
+  /** Fallen wizards playing their death animation (purely visual) */
+  private corpses: Corpse[] = [];
   /** Smooth WebGL terrain layers, stacked under and over the 2D canvas (null → pixel 2D renderer) */
   private glSolid: TerrainGL | null = null;
   private glLiquid: TerrainGL | null = null;
@@ -279,6 +286,7 @@ export class Game implements ProjectileWorld {
     const m = this.modifiers;
     this.terrain.generateMap(m.mapSeed, m.mapType, m.acidEnabled, m.gameMode === 'koth' ? CONFIG.KOTH_ZONE_RADIUS : 0);
     this.particles.clear();
+    this.corpses = [];
     this.projectiles = [];
     this.pendingEvents = [];
     this.pendingStates = [];
@@ -290,6 +298,8 @@ export class Game implements ProjectileWorld {
     this.camX = CONFIG.MAP_WIDTH / 2;
     this.camY = CONFIG.MAP_HEIGHT / 2;
     this.phase = 'playing';
+    // Recolour the wizard sprites while the players are in the grimoire (no hitch at spawn)
+    setTimeout(() => prepareWizards([...this.players.map(p => p.color), FROZEN_ROBE]), 50);
   }
 
   private createWorm(p: LobbyPlayerInfo): Worm {
@@ -491,13 +501,14 @@ export class Game implements ProjectileWorld {
       for (const w of this.worms) {
         if (w.isAlive() && w.burnTimer > 0) {
           this.particles.spawn(w.x + (Math.random() - 0.5) * 8, w.y + (Math.random() - 0.5) * 8,
-            (Math.random() - 0.5) * 0.4, -0.6, 'fire', undefined, 2.2, 16);
+            (Math.random() - 0.5) * 0.4, -0.6, 'fire', undefined, 6, 16);
         }
       }
     }
     for (let i = this.zaps.length - 1; i >= 0; i--) {
       if (--this.zaps[i].life <= 0) this.zaps.splice(i, 1);
     }
+    this.updateCorpses();
     this.particles.update(this.terrain);
   }
 
@@ -642,8 +653,17 @@ export class Game implements ProjectileWorld {
   /** Casting sound + staff sparkle */
   private castFX(worm: Worm, weapon: WeaponDef, angle: number) {
     sound.playSpellForWeapon(weapon.id);
-    this.particles.spawn(worm.x + Math.cos(angle) * 12, worm.y + Math.sin(angle) * 12,
-      Math.cos(angle) * 2, Math.sin(angle) * 2, 'spark', weapon.elementColor, 2.5, 12);
+    worm.onCast();
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    const x = worm.x + worm.facing * 1.5 + c * 10;
+    const y = worm.y - 5 + s * 10;
+    this.particles.spawn(x, y, c * 0.3, s * 0.3, 'flash', weapon.elementColor, 9, 8).sprite = 'magic_05';
+    for (let i = 0; i < 4; i++) {
+      const a = angle + (Math.random() - 0.5) * 0.9;
+      const sp = 1 + Math.random() * 1.5;
+      this.particles.spawn(x, y, Math.cos(a) * sp, Math.sin(a) * sp, 'spark', weapon.elementColor, 0.9, 10 + Math.floor(Math.random() * 8));
+    }
   }
 
   // ── ProjectileWorld implementation (host) ────────────────────────────────
@@ -689,8 +709,8 @@ export class Game implements ProjectileWorld {
       return;
     }
 
-    this.explosionFX(x, y, r, weapon.elementColor);
-    this.emit({ t: 'boom', x: q(x), y: q(y), r: q(r), c: weapon.elementColor });
+    this.explosionFX(x, y, r, weapon.elementColor, !!weapon.fire);
+    this.emit({ t: 'boom', x: q(x), y: q(y), r: q(r), c: weapon.elementColor, ...(weapon.fire ? { f: 1 as const } : {}) });
 
     // Damage: full damage on a direct hit, splash with falloff around
     const blast = Math.max(r * 1.5, 6);
@@ -865,9 +885,12 @@ export class Game implements ProjectileWorld {
 
     w.takeDamage(dmg, kx, ky);
     if (dmg > 0 && !quiet) {
-      const n = Math.max(3, Math.min(25, Math.round(dmg / 2)));
-      this.particles.spawnBloodBurst(w.x, w.y, n);
-      this.emit({ t: 'blood', x: Math.round(w.x), y: Math.round(w.y), n });
+      const n = Math.max(5, Math.min(32, Math.round(dmg * 0.7)));
+      const k = Math.hypot(kx, ky);
+      const dx = k > 0.05 ? Math.round((kx / k) * 10) / 10 : 0;
+      const dy = k > 0.05 ? Math.round((ky / k) * 10) / 10 : 0;
+      this.bloodFX(Math.round(w.x), Math.round(w.y), n, dx, dy);
+      this.emit({ t: 'blood', x: Math.round(w.x), y: Math.round(w.y), n, ...(k > 0.05 ? { dx, dy } : {}) });
       sound.playHurt();
     }
     if (!w.isAlive()) this.onWormKilled(w, attackerId);
@@ -881,7 +904,7 @@ export class Game implements ProjectileWorld {
     victim.deaths++;
     victim.money += MONEY_DEATH;
     victim.rope.release();
-    this.particles.spawnGibs(victim.x, victim.y);
+    this.addCorpse(victim);
     sound.playDie();
 
     const killer = this.worms.find(k => k.id === attackerId);
@@ -908,6 +931,51 @@ export class Game implements ProjectileWorld {
     if (victim.id === this.localId && this.phase === 'playing') this.onLocalDeath?.(victim);
   }
 
+  /** Spray of blood in the direction of the hit (from the wizard's body, not his feet). */
+  private bloodFX(x: number, y: number, n: number, dx: number, dy: number) {
+    this.particles.spawnBloodBurst(x + dx * 2, y - 3 + dy * 2, n, dx, dy, 2.2 + Math.min(2, n / 12));
+  }
+
+  // ── Corpses ──────────────────────────────────────────────────────────────
+
+  private addCorpse(w: Worm) {
+    this.particles.spawnGibs(w.x, w.y - 3);
+    this.corpses.push({ x: w.x, y: w.y, vx: w.vx * 0.5, vy: Math.min(0, w.vy), facing: w.facing, color: w.color, born: performance.now() });
+    if (this.corpses.length > 12) this.corpses.shift();
+  }
+
+  /** The body falls to the ground (simple gravity), then fades away. */
+  private updateCorpses() {
+    const now = performance.now();
+    this.corpses = this.corpses.filter(c => now - c.born < CORPSE_MS);
+    for (const c of this.corpses) {
+      c.vy = Math.min(c.vy + CONFIG.GRAVITY, CONFIG.MAX_FALL_SPEED);
+      c.vx *= 0.9;
+      if (!this.terrain.isSolid(c.x + c.vx, c.y)) c.x += c.vx;
+      const steps = Math.ceil(Math.abs(c.vy));
+      for (let i = 0; i < steps; i++) {
+        const dy = c.vy / steps;
+        if (this.terrain.isSolid(c.x, c.y + WIZARD_FOOT + dy)) {
+          c.vy = 0;
+          break;
+        }
+        c.y += dy;
+      }
+      if (this.terrain.fluidAt(c.x, c.y)) c.vy *= 0.5;
+    }
+  }
+
+  private drawCorpses(ctx: CanvasRenderingContext2D, now: number) {
+    for (const c of this.corpses) {
+      const t = now - c.born;
+      const frames = animFrames('die');
+      const frame = Math.min(frames - 1, Math.floor(t / 85));
+      ctx.globalAlpha = Math.max(0, Math.min(1, (CORPSE_MS - t) / 700));
+      drawWizard(ctx, c.color, 'die', frame, c.x, c.y + WIZARD_FOOT, c.facing, WIZARD_HEIGHT);
+    }
+    ctx.globalAlpha = 1;
+  }
+
   private addZap(pts: number[]) {
     this.zaps.push({ pts, life: 14 });
     sound.playRailgun();
@@ -923,12 +991,17 @@ export class Game implements ProjectileWorld {
     sound.playVortex();
   }
 
-  private explosionFX(x: number, y: number, r: number, color?: string) {
+  private explosionFX(x: number, y: number, r: number, color?: string, fiery = false) {
     if (r >= 10) {
-      this.particles.spawnExplosionFX(x, y, r, color);
+      this.particles.spawnExplosionFX(x, y, r, color, fiery);
       sound.playExplosion(r);
     } else {
-      this.particles.spawn(x, y, 0, 0, 'spark', color, 2, 20);
+      // Small impact: a little flash and a few embers
+      this.particles.spawn(x, y, 0, 0, 'flash', color, 10, 8).sprite = 'star_06';
+      for (let i = 0; i < 5; i++) {
+        const a = Math.random() * Math.PI * 2;
+        this.particles.spawn(x, y, Math.cos(a) * 1.2, Math.sin(a) * 1.2 - 0.5, 'spark', color, 0.8, 14);
+      }
       if (r >= 6) sound.playExplosion(r);
     }
     if (r >= 15) {
@@ -1004,13 +1077,13 @@ export class Game implements ProjectileWorld {
         this.terrain.freezeWater(ev.x, ev.y, ev.r);
         break;
       case 'boom':
-        this.explosionFX(ev.x, ev.y, ev.r, ev.c);
+        this.explosionFX(ev.x, ev.y, ev.r, ev.c, !!ev.f);
         break;
       case 'acid':
         this.terrain.addAcid(ev.x, ev.y, ev.r);
         break;
       case 'blood':
-        this.particles.spawnBloodBurst(ev.x, ev.y, ev.n);
+        this.bloodFX(ev.x, ev.y, ev.n, ev.dx ?? 0, ev.dy ?? 0);
         sound.playHurt();
         break;
       case 'shot': {
@@ -1053,7 +1126,7 @@ export class Game implements ProjectileWorld {
       const isLocal = worm.id === this.localId;
 
       if (wasAlive && ws.hp <= 0) {
-        this.particles.spawnGibs(worm.x, worm.y);
+        this.addCorpse(worm);
         sound.playDie();
       }
 
@@ -1264,11 +1337,13 @@ export class Game implements ProjectileWorld {
     ctx.translate(-this.camX + sx, -this.camY + sy);
 
     if (!smooth) this.terrain.draw(ctx, this.frame);
+    ctx.imageSmoothingEnabled = true; // painted sprites
     if (this.modifiers.gameMode === 'koth') this.drawKothZone(ctx);
+    this.drawCorpses(ctx, now);
+    for (const w of this.worms) w.draw(ctx, alpha, w.id === this.localId, this.terrain, now);
     this.particles.draw(ctx);
-    for (const p of this.projectiles) p.draw(ctx, alpha);
+    for (const p of this.projectiles) p.draw(ctx, alpha, now);
     this.drawZaps(ctx);
-    for (const w of this.worms) w.draw(ctx, alpha, w.id === this.localId);
     if (!smooth) this.terrain.drawLiquids(ctx, this.frame);
     ctx.restore();
 

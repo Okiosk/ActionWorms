@@ -1,5 +1,6 @@
 import { CONFIG } from '../config';
 import { generateLayout, MapTheme, MapType, MAP_THEMES } from './MapGenerator';
+import { fxSprite, FxName } from './Sprites';
 
 export type { MapType };
 
@@ -8,6 +9,9 @@ const { MAT_AIR: AIR, MAT_DIRT: DIRT, MAT_ROCK: ROCK, MAT_ACID: ACID, MAT_ICE: I
 
 /** Materials removed by explosions (wood only partially, unless the spell is a fire spell) */
 const DESTRUCTIBLE = new Set([DIRT, ICE, CRYSTAL, WOOD, BOUNCE]);
+/** Blood decal colours and splat shapes */
+const BLOOD_STAIN = ['#7d0a0a', '#640606', '#931010'];
+const SPLATS: FxName[] = ['dirt_01', 'dirt_02', 'dirt_03'];
 /** Fraction of the blast radius that eats into wood for non-fire spells */
 const WOOD_RESISTANCE = 0.4;
 
@@ -27,6 +31,7 @@ type RGB = [number, number, number];
  *  - rock       : indestructible rock
  *  - acid       : acid (pulsing)
  *  - liquid     : water & lava, drawn over the wizards so they look submerged
+ *  - stains     : blood decals, always restricted to solid pixels
  */
 export class Terrain {
   public width: number;
@@ -208,8 +213,26 @@ export class Terrain {
         img.data[((changed[i + 1] - minY) * w + (changed[i] - minX)) * 4 + 3] = 0;
       }
       this.groundCtx.putImageData(img, minX, minY);
+      this.clearStains(changed, minX, minY, maxX, maxY);
     }
     return result;
+  }
+
+  /** Blood disappears with the pixels it was on (flat [x, y, …] list inside the rect). */
+  private clearStains(pixels: number[], minX: number, minY: number, maxX: number, maxY: number) {
+    const w = maxX - minX + 1;
+    const img = this.stainCtx.getImageData(minX, minY, w, maxY - minY + 1);
+    let any = false;
+    for (let i = 0; i < pixels.length; i += 2) {
+      const a = ((pixels[i + 1] - minY) * w + (pixels[i] - minX)) * 4 + 3;
+      if (img.data[a] !== 0) {
+        img.data[a] = 0;
+        any = true;
+      }
+    }
+    if (!any) return;
+    this.stainCtx.putImageData(img, minX, minY);
+    this.stains.push({ x0: minX, y0: minY, x1: maxX, y1: maxY });
   }
 
   /** Runs `fn` on every pixel of a disc (returns the new material or null) and repaints. */
@@ -228,6 +251,7 @@ export class Terrain {
     const ground = this.groundCtx.getImageData(minX, minY, w, h);
     const acid = this.acidCtx.getImageData(minX, minY, w, h);
     const liquid = this.liquidCtx.getImageData(minX, minY, w, h);
+    const changed: number[] = [];
     for (let y = minY; y <= maxY; y++) {
       for (let x = minX; x <= maxX; x++) {
         if ((x - cx) ** 2 + (y - cy) ** 2 > r * r) continue;
@@ -235,6 +259,7 @@ export class Terrain {
         const next = fn(idx, x, y);
         if (next === null || next === this.materials[idx]) continue;
         this.materials[idx] = next;
+        changed.push(x, y);
         const p = ((y - minY) * w + (x - minX)) * 4;
         ground.data[p + 3] = 0;
         acid.data[p + 3] = 0;
@@ -246,6 +271,7 @@ export class Terrain {
     this.acidCtx.putImageData(acid, minX, minY);
     this.liquidCtx.putImageData(liquid, minX, minY);
     this.markDirty(minX, minY, maxX, maxY);
+    if (changed.length > 0) this.clearStains(changed, minX, minY, maxX, maxY);
   }
 
   private markDirty(x0: number, y0: number, x1: number, y1: number) {
@@ -287,24 +313,50 @@ export class Terrain {
     return froze;
   }
 
-  /** Blood splat (purely visual) on the ground layer. */
-  public addBlood(x: number, y: number, radius: number = 2) {
-    if (!DESTRUCTIBLE.has(this.materialAt(x, y))) return;
-    this.groundCtx.save();
-    this.groundCtx.globalCompositeOperation = 'source-atop';
-    this.groundCtx.fillStyle = Math.random() > 0.4 ? CONFIG.COLORS.BLOOD_FRESH : CONFIG.COLORS.BLOOD_DARK;
-    this.groundCtx.beginPath();
-    const r = radius + Math.random() * 1.5;
-    this.groundCtx.arc(x, y, r, 0, Math.PI * 2);
-    this.groundCtx.fill();
-    this.groundCtx.restore();
+  /**
+   * Blood splat (purely visual) where a droplet hit the solid pixel (x, y), on any solid
+   * material. Faster droplets leave bigger splats stretched along their direction.
+   */
+  public addBlood(x: number, y: number, size: number, vx = 0, vy = 0) {
+    if (!this.isSolid(x, y) || !this.isInBounds(x, y)) return;
+    const speed = Math.hypot(vx, vy);
+    const r = Math.min(4.5, size * (0.9 + speed * 0.3));
+    const stretch = 1 + Math.min(1.4, speed * 0.25);
+    const ctx = this.stainCtx;
+    const color = BLOOD_STAIN[(Math.random() * BLOOD_STAIN.length) | 0];
+    const sprite = fxSprite(SPLATS[(Math.random() * SPLATS.length) | 0], color, true);
+    ctx.globalAlpha = 0.8 + Math.random() * 0.2;
+    if (sprite) {
+      const d = r * 2.6;
+      ctx.translate(x, y);
+      ctx.rotate(speed > 0.3 ? Math.atan2(vy, vx) : Math.random() * Math.PI * 2);
+      ctx.drawImage(sprite, -d * stretch * 0.5, -d * 0.5, d * stretch, d);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+    } else {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
 
-    this.stainCtx.fillStyle = this.groundCtx.fillStyle;
-    this.stainCtx.beginPath();
-    this.stainCtx.arc(x, y, r, 0, Math.PI * 2);
-    this.stainCtx.fill();
-    const m = Math.ceil(r) + 1;
-    this.stains.push({ x0: Math.floor(x) - m, y0: Math.floor(y) - m, x1: Math.floor(x) + m, y1: Math.floor(y) + m });
+    // Keep the decal on solid pixels only (no blood floating in the air or in water)
+    const m = Math.ceil(r * 1.3 * stretch) + 1;
+    const x0 = Math.max(0, Math.floor(x) - m), y0 = Math.max(0, Math.floor(y) - m);
+    const x1 = Math.min(this.width - 1, Math.floor(x) + m), y1 = Math.min(this.height - 1, Math.floor(y) + m);
+    const w = x1 - x0 + 1;
+    const img = ctx.getImageData(x0, y0, w, y1 - y0 + 1);
+    const data = img.data;
+    for (let py = y0; py <= y1; py++) {
+      for (let px = x0; px <= x1; px++) {
+        const a = ((py - y0) * w + (px - x0)) * 4 + 3;
+        if (data[a] === 0) continue;
+        const mat = this.materials[py * this.width + px];
+        if (mat === AIR || mat === WATER || mat === LAVA) data[a] = 0;
+      }
+    }
+    ctx.putImageData(img, x0, y0);
+    this.stains.push({ x0, y0, x1, y1 });
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -622,6 +674,7 @@ export class Terrain {
     ctx.drawImage(this.bgCanvas, 0, 0, this.width, this.height);
     ctx.drawImage(this.groundCanvas, 0, 0);
     ctx.drawImage(this.rockCanvas, 0, 0);
+    ctx.drawImage(this.stainCanvas, 0, 0);
     ctx.globalAlpha = 0.7 + Math.sin(time * 0.08) * 0.3;
     ctx.drawImage(this.acidCanvas, 0, 0);
     ctx.globalAlpha = 1;
@@ -637,7 +690,7 @@ export class Terrain {
   /** Scaled-down picture of the whole map (lobby preview). */
   public drawPreview(ctx: CanvasRenderingContext2D, w: number, h: number) {
     ctx.imageSmoothingEnabled = true;
-    for (const layer of [this.bgCanvas, this.groundCanvas, this.rockCanvas, this.acidCanvas, this.liquidCanvas]) {
+    for (const layer of [this.bgCanvas, this.groundCanvas, this.rockCanvas, this.stainCanvas, this.acidCanvas, this.liquidCanvas]) {
       ctx.drawImage(layer, 0, 0, w, h);
     }
   }
@@ -665,6 +718,29 @@ export class ChangeLog {
   public clear() {
     this.base += this.rects.length;
     this.rects = [];
+  }
+
+  /**
+   * Rectangles added since `from`, overlapping / close ones merged (so far-apart splats
+   * don't turn into one huge upload); 'all' if they were dropped.
+   */
+  public listSince(from: number, gap = 8): Rect[] | 'all' {
+    if (from < this.base) return 'all';
+    const out: Rect[] = [];
+    for (let i = from - this.base; i < this.rects.length; i++) {
+      const r = { ...this.rects[i] };
+      for (let j = 0; j < out.length; j++) {
+        const o = out[j];
+        if (r.x0 - gap <= o.x1 && o.x0 - gap <= r.x1 && r.y0 - gap <= o.y1 && o.y0 - gap <= r.y1) {
+          r.x0 = Math.min(r.x0, o.x0); r.y0 = Math.min(r.y0, o.y0);
+          r.x1 = Math.max(r.x1, o.x1); r.y1 = Math.max(r.y1, o.y1);
+          out.splice(j, 1);
+          j = -1; // the grown rect may now touch others
+        }
+      }
+      out.push(r);
+    }
+    return out;
   }
 
   /** Union of the rectangles added since `from`; 'all' if they were dropped; null if none. */

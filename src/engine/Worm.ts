@@ -5,6 +5,7 @@ import { Terrain } from './Terrain';
 import { NinjaRope } from './NinjaRope';
 import { ParticleManager } from './Particles';
 import { MatchModifiers, DEFAULT_MODIFIERS } from '../net/Protocol';
+import { drawWizard, drawFx, WizardAnim } from './Sprites';
 
 export interface WormInput {
   left: boolean;
@@ -31,6 +32,12 @@ export const EMPTY_INPUT: WormInput = {
 const FEET = 5;
 const HEAD = 5;
 const SIDE = 4.6;
+
+/** Height of the painted wizard in world pixels, and where his feet are below the centre */
+export const WIZARD_HEIGHT = 20;
+export const WIZARD_FOOT = 5.7;
+/** Robe colour of a frozen wizard */
+export const FROZEN_ROBE = '#a8dcff';
 
 export class Worm {
   public id: string;
@@ -67,7 +74,15 @@ export class Worm {
 
   public rope: NinjaRope = new NinjaRope();
   private ropeHeld: boolean = false;
+  // Animation state (rendering only, in ms)
   private animTimer: number = 0;
+  private castAt = -1e9;
+  private hurtAt = -1e9;
+  private seenHealth = 0;
+  private runPhase = 0;
+  private idlePhase = 0;
+  private lastDrawAt = 0;
+  private pose: { anim: WizardAnim; frame: number } = { anim: 'idle', frame: 0 };
 
   public weapon: WeaponDef = WEAPON_REGISTRY[DEFAULT_WEAPON];
   public shotCooldown: number = 0;
@@ -110,6 +125,12 @@ export class Worm {
     this.waitingForShop = false;
     this.rope.release();
     this.resetAmmo();
+  }
+
+  /** Staff swing animation (called whenever a spell is cast, on every machine) */
+  public onCast() {
+    const now = performance.now();
+    if (now - this.castAt > 150) this.castAt = now;
   }
 
   public isAlive(): boolean {
@@ -457,192 +478,139 @@ export class Worm {
   }
 
   // ════════════════════════════════════════════════════════════════════════
-  // Rendering — the little wizard and his staff
+  // Rendering — painted, animated wizard (robe in the player's colour)
   // ════════════════════════════════════════════════════════════════════════
 
-  public draw(ctx: CanvasRenderingContext2D, alpha: number, isLocal: boolean) {
-    if (!this.isAlive()) return;
+  /** Picks the animation frame: hurt > casting > airborne > running > idle. */
+  private updatePose(terrain: Terrain, now: number) {
+    const dt = Math.min(100, now - (this.lastDrawAt || now));
+    this.lastDrawAt = now;
+    if (this.health < this.seenHealth - 3) this.hurtAt = now;
+    this.seenHealth = this.health;
+    if (this.freezeTimer > 0) return; // frozen in place
+
+    const sinceHurt = now - this.hurtAt;
+    const sinceCast = now - this.castAt;
+    const speed = Math.abs(this.x - this.prevX);
+    const onGround = this.grounded || this.blockedDown(terrain, this.x, this.y + 1.5);
+    const pose = this.pose;
+    if (sinceHurt < 260) {
+      pose.anim = 'damage';
+      pose.frame = Math.floor((sinceHurt / 260) * 7);
+    } else if (sinceCast < 250) {
+      // Starts with the staff already raised: the spell leaves on the swing
+      pose.anim = 'attack';
+      pose.frame = 2 + Math.floor((sinceCast / 250) * 5);
+    } else if (!onGround && this.rope.state !== 'attached') {
+      pose.anim = 'run';
+      pose.frame = this.vy < 0 ? 4 : 10; // legs apart
+    } else if (onGround && speed > 0.12) {
+      this.runPhase += dt * (0.004 + Math.min(speed, 2) * 0.008);
+      pose.anim = 'run';
+      pose.frame = Math.floor(this.runPhase) % 13;
+    } else {
+      this.idlePhase += dt * 0.011;
+      pose.anim = 'idle';
+      pose.frame = Math.floor(this.idlePhase) % 13;
+    }
+  }
+
+  public draw(ctx: CanvasRenderingContext2D, alpha: number, isLocal: boolean, terrain: Terrain, now: number) {
+    if (!this.isAlive()) {
+      this.seenHealth = 0;
+      return;
+    }
     this.animTimer++;
+    this.updatePose(terrain, now);
 
     const px = this.prevX + (this.x - this.prevX) * alpha;
     const py = this.prevY + (this.y - this.prevY) * alpha;
     const f = this.facing;
+    const frozen = this.freezeTimer > 0;
+    const spellColor = this.weapon.elementColor;
+    const aimCos = Math.cos(this.aimAngle);
+    const aimSin = Math.sin(this.aimAngle);
 
     this.rope.draw(ctx, px, py);
 
+    // Wizard
+    const footY = py + WIZARD_FOOT;
+    if (!drawWizard(ctx, frozen ? FROZEN_ROBE : this.color, this.pose.anim, this.pose.frame, px, footY, f, WIZARD_HEIGHT)) {
+      ctx.fillStyle = this.color; // sprites still loading
+      ctx.beginPath();
+      ctx.ellipse(px, py - 3, 4.5, 8.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (frozen) {
+      // Encased in ice
+      ctx.save();
+      ctx.globalAlpha = 0.35;
+      ctx.fillStyle = '#cdeeff';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 0.6;
+      ctx.beginPath();
+      ctx.roundRect(px - 7.5, footY - WIZARD_HEIGHT - 1.5, 15, WIZARD_HEIGHT + 2, 2.5);
+      ctx.fill();
+      ctx.globalAlpha = 0.8;
+      ctx.stroke();
+      ctx.restore();
+    }
+
     ctx.save();
-    ctx.translate(px, py);
+    ctx.globalCompositeOperation = 'lighter';
 
-    const bobY = this.grounded ? 0 : Math.sin(this.animTimer * 0.14) * 1.2;
-    const spellColor = this.weapon.elementColor;
-
-    // Shadow
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
-    ctx.beginPath();
-    ctx.ellipse(0, 6, 6, 2.2, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Robe
-    ctx.fillStyle = this.freezeTimer > 0 ? '#aaddff' : this.color;
-    ctx.beginPath();
-    ctx.moveTo(-4, -1 + bobY);
-    ctx.lineTo(4, -1 + bobY);
-    ctx.lineTo(5.5 * f, 5.5 + bobY);
-    ctx.lineTo(-5.5 * f, 5.5 + bobY);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = '#ffd700';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(-5.5 * f, 5.5 + bobY);
-    ctx.lineTo(5.5 * f, 5.5 + bobY);
-    ctx.stroke();
-
-    // Hood & glowing eyes
-    ctx.fillStyle = this.color;
-    ctx.beginPath();
-    ctx.arc(0, -3 + bobY, 4.8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#0f0a1c';
-    ctx.beginPath();
-    ctx.ellipse(f * 1.5, -3 + bobY, 3.2, 2.8, 0, 0, Math.PI * 2);
-    ctx.fill();
-    const eyeX = f * 2;
-    const eyeY = -3.2 + bobY;
-    ctx.fillStyle = '#66ffff';
-    ctx.shadowColor = '#00ffff';
-    ctx.shadowBlur = 4;
-    ctx.fillRect(eyeX - 0.5, eyeY - 0.5, 2, 1.8);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(eyeX + (f > 0 ? 0.5 : -0.5), eyeY, 1, 1);
-    ctx.shadowBlur = 0;
-
-    // Pointy hat
-    ctx.fillStyle = this.color;
-    ctx.beginPath();
-    ctx.ellipse(0, -5.5 + bobY, 6.5, 2.2, -f * 0.1, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#110a20';
-    ctx.lineWidth = 0.8;
-    ctx.stroke();
-    ctx.strokeStyle = '#ffdd44';
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.ellipse(0, -6.2 + bobY, 4.2, 1.4, -f * 0.1, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.fillStyle = this.color;
-    ctx.beginPath();
-    ctx.moveTo(-4, -6 + bobY);
-    ctx.quadraticCurveTo(-1, -12 + bobY, -f * 4, -15.5 + bobY);
-    ctx.lineTo(2.5, -6 + bobY);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = '#110a20';
-    ctx.lineWidth = 0.8;
-    ctx.stroke();
-    ctx.fillStyle = '#ffee44';
-    ctx.beginPath();
-    ctx.arc(-f * 4, -15.5 + bobY, 1.2, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Staff
-    const handX = f * 2.5;
-    const handY = 0.5 + bobY;
-    const aimCos = Math.cos(this.aimAngle);
-    const aimSin = Math.sin(this.aimAngle);
-    const tipX = handX + aimCos * 13.5;
-    const tipY = handY + aimSin * 13.5;
-    const tailX = handX - aimCos * 4.5;
-    const tailY = handY - aimSin * 4.5;
-    ctx.strokeStyle = '#5a351e';
-    ctx.lineWidth = 2.2;
-    ctx.beginPath();
-    ctx.moveTo(tailX, tailY);
-    ctx.lineTo(tipX, tipY);
-    ctx.stroke();
-    ctx.strokeStyle = '#8a5530';
-    ctx.lineWidth = 1.0;
-    ctx.stroke();
-    ctx.fillStyle = '#ffd700';
-    ctx.beginPath();
-    ctx.arc(tipX, tipY, 2.2, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Crystal (bigger right after casting)
-    const casting = this.shotCooldown > 0;
-    const crystalR = casting ? 4.8 : 3.2;
-    ctx.shadowColor = spellColor;
-    ctx.shadowBlur = casting ? 14 : 7;
-    ctx.fillStyle = spellColor;
-    ctx.beginPath();
-    ctx.arc(tipX + aimCos * 1.5, tipY + aimSin * 1.5, crystalR, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.arc(tipX + aimCos * 1.5, tipY + aimSin * 1.5, crystalR * 0.45, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-
-    ctx.fillStyle = '#f5cda8';
-    ctx.beginPath();
-    ctx.arc(handX, handY, 1.8, 0, Math.PI * 2);
-    ctx.fill();
+    // Spell focus: a glowing orb floating in the aim direction (bigger right after casting)
+    const casting = this.shotCooldown > 0 || now - this.castAt < 200;
+    const ox = px + f * 1.5 + aimCos * 9;
+    const oy = py - 5 + aimSin * 9;
+    const pulse = 0.85 + 0.15 * Math.sin(now * 0.008);
+    drawFx(ctx, 'circle_05', ox, oy, (casting ? 15 : 10) * pulse, spellColor, 0.9);
+    drawFx(ctx, 'star_04', ox, oy, casting ? 11 : 7, '#ffffff', 0.9, now * 0.002);
 
     // Mirror shield bubble
     if (this.shieldTimer > 0) {
       const fading = this.shieldTimer < 40 && Math.floor(this.shieldTimer / 5) % 2 === 0;
-      ctx.save();
-      ctx.globalAlpha = fading ? 0.25 : 0.6;
-      ctx.strokeStyle = '#a8e6ff';
-      ctx.shadowColor = '#7fd4ff';
-      ctx.shadowBlur = 10;
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.arc(0, -3, 13 + Math.sin(this.animTimer * 0.2) * 0.6, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.fillStyle = 'rgba(127, 212, 255, 0.12)';
-      ctx.fill();
-      ctx.restore();
+      const a = fading ? 0.35 : 0.8;
+      drawFx(ctx, 'light_01', px, py - 4, 34, '#7fd4ff', a * 0.45, now * 0.001);
+      drawFx(ctx, 'circle_02', px, py - 4, 30 + Math.sin(this.animTimer * 0.2), '#a8e6ff', a);
     }
+    ctx.restore();
 
     // Aiming rune (only for the local player — the mouse already shows where others aim)
     if (isLocal) {
       ctx.save();
-      ctx.translate(aimCos * 22, aimSin * 22);
-      ctx.rotate(this.animTimer * 0.05);
+      ctx.translate(px + aimCos * 24, py - 3 + aimSin * 24);
+      ctx.rotate(now * 0.003);
       ctx.strokeStyle = spellColor;
-      ctx.shadowColor = spellColor;
-      ctx.shadowBlur = 4;
-      ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.9;
+      ctx.lineWidth = 0.9;
       ctx.beginPath();
-      ctx.arc(0, 0, 4, 0, Math.PI * 2);
-      ctx.stroke();
+      ctx.arc(0, 0, 3.5, 0, Math.PI * 2);
       for (let a = 0; a < 4; a++) {
         const ang = (a * Math.PI) / 2;
-        ctx.beginPath();
-        ctx.moveTo(Math.cos(ang) * 4, Math.sin(ang) * 4);
-        ctx.lineTo(Math.cos(ang) * 6.5, Math.sin(ang) * 6.5);
-        ctx.stroke();
+        ctx.moveTo(Math.cos(ang) * 3.5, Math.sin(ang) * 3.5);
+        ctx.lineTo(Math.cos(ang) * 6, Math.sin(ang) * 6);
       }
+      ctx.stroke();
       ctx.restore();
     }
 
     // Health bar
-    const barWidth = 22;
+    const barWidth = 20;
+    const barY = footY - WIZARD_HEIGHT - 5;
     const hpRatio = Math.max(0, Math.min(1, this.health / this.maxHealth));
     ctx.fillStyle = 'rgba(15, 10, 8, 0.75)';
-    ctx.fillRect(-barWidth / 2 - 1, -20, barWidth + 2, 4.5);
+    ctx.fillRect(px - barWidth / 2 - 0.75, barY - 0.75, barWidth + 1.5, 3.5);
     ctx.fillStyle = hpRatio > 0.5 ? '#2bd461' : hpRatio > 0.25 ? '#ffaa22' : '#ee2b2b';
-    ctx.fillRect(-barWidth / 2, -19.25, barWidth * hpRatio, 3);
+    ctx.fillRect(px - barWidth / 2, barY, barWidth * hpRatio, 2);
 
     // Name
-    ctx.font = '600 6px Inter, system-ui, sans-serif';
+    ctx.font = '600 5.5px Inter, system-ui, sans-serif';
     ctx.textAlign = 'center';
+    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+    ctx.strokeText(this.name, px, barY - 2);
     ctx.fillStyle = '#ffecb3';
-    ctx.shadowColor = '#000000';
-    ctx.shadowBlur = 3;
-    ctx.fillText(this.name, 0, -22.5);
-
-    ctx.restore();
+    ctx.fillText(this.name, px, barY - 2);
   }
 }

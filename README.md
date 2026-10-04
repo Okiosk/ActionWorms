@@ -59,6 +59,12 @@ Le terrain est simulé pixel par pixel (destructions précises, identiques chez 
 
 Sans carte graphique (rendu logiciel) ou sans WebGL2, le jeu passe automatiquement en rendu « pixel ». Le choix peut être forcé dans le menu pause (`Échap` → Graphismes).
 
+Les sorciers sont des personnages peints et animés : repos, course, saut, coup de bâton au lancer, recul quand ils sont touchés, chute à la mort. La robe prend la couleur du joueur. Les sorts et explosions utilisent des sprites de particules lumineux, et le grimoire affiche une icône peinte pour chaque sort.
+
+Le sang gicle dans la direction du coup. Il tache tous les matériaux solides, roche comprise, et coule le long des murs. Les taches disparaissent avec le terrain détruit.
+
+Les auteurs et licences des images sont listés dans [CREDITS.md](CREDITS.md).
+
 ## Sorts
 
 19 sorts, chacun avec un effet unique. On gagne de l'or en éliminant des sorciers (+75) et en mourant (+25).
@@ -99,9 +105,12 @@ Ouvre l'URL locale dans plusieurs onglets pour tester le multijoueur. Le déploi
 
 - `src/engine/Game.ts` — boucle de jeu, logique hôte/client, réseau, rendu
 - `src/engine/Worm.ts`, `NinjaRope.ts`, `Projectile.ts` — physique du sorcier, du grappin et des sorts
+- `src/engine/Sprites.ts` — sprites peints : sorcier animé (recoloré par joueur), particules, icônes
+- `src/engine/Particles.ts` — particules : sang, fumée, flammes, étincelles, explosions
 - `src/engine/Terrain.ts` — terrain destructible multi-matériaux (et rendu pixel de secours)
 - `src/engine/TerrainGL.ts` — rendu lisse du terrain en WebGL2 (shader)
 - `src/engine/MapGenerator.ts` — génération des 6 cartes
 - `src/net/` — connexion PeerJS et format des messages
 - `src/ui/` — menus et salon, HUD, grimoire
 - `src/weapons/WeaponRegistry.ts` — réglages des sorts
+- `src/assets/` — images (voir [CREDITS.md](CREDITS.md))

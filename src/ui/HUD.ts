@@ -1,3 +1,4 @@
+import { spellIconStyle } from '../engine/Sprites';
 import { CONFIG } from '../config';
 import { Game } from '../engine/Game';
 import { sound } from '../engine/SoundEffects';
@@ -44,7 +45,7 @@ export class HUD {
           <span class="hp-val" id="hud-hp-val"></span>
         </div>
         <div class="weapon-row">
-          <span id="hud-wicon"></span>
+          <span class="sicon small" id="hud-wicon"></span>
           <span class="wname" id="hud-wname"></span>
           <span class="ammo" id="hud-ammo"></span>
         </div>
@@ -155,7 +156,10 @@ export class HUD {
     this.hpVal.textContent = String(Math.ceil(local.health));
 
     const w = local.weapon;
-    this.weaponIcon.textContent = w.icon;
+    if (this.weaponIcon.dataset.id !== w.id) {
+      this.weaponIcon.dataset.id = w.id;
+      this.weaponIcon.setAttribute('style', spellIconStyle(w.id));
+    }
     this.weaponName.textContent = w.name;
     if (mods.unlimitedAmmo) {
       this.ammo.textContent = '∞';

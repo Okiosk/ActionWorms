@@ -562,7 +562,18 @@ table.standings { width: 100%; border-collapse: collapse; font-size: 14px; }
 .spell:hover { border-color: var(--border-strong); background: rgba(255, 255, 255, 0.04); }
 .spell.selected { border-color: var(--spell-color, var(--gold)); background: rgba(255, 193, 77, 0.1); box-shadow: 0 0 12px -2px var(--spell-color, var(--gold)); }
 .spell.locked { opacity: 0.4; cursor: not-allowed; }
-.spell .icon { font-size: 26px; line-height: 1; }
+.sicon {
+  display: inline-block;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  background-repeat: no-repeat;
+  box-shadow: 0 0 0 1px rgba(255, 220, 150, 0.25), 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+.sicon.big { width: 56px; height: 56px; }
+.sicon.small { width: 22px; height: 22px; border-radius: 5px; }
+.spell.selected .sicon { box-shadow: 0 0 0 1px var(--spell-color, var(--gold)), 0 0 10px -1px var(--spell-color, var(--gold)); }
 .spell .sname { font-size: 12px; font-weight: 600; line-height: 1.2; }
 .spell .price { font-size: 12px; color: var(--gold); }
 .spell .price.free { color: var(--ok); }
@@ -576,7 +587,6 @@ table.standings { width: 100%; border-collapse: collapse; font-size: 14px; }
   background: rgba(0, 0, 0, 0.3);
   min-height: 64px;
 }
-.spell-detail .icon { font-size: 30px; }
 .spell-detail .txt { flex: 1; font-size: 13px; color: var(--muted); }
 .spell-detail .txt b { display: block; color: var(--text); font-size: 15px; }
 .spell-detail .stats { font-size: 12px; margin-top: 2px; }

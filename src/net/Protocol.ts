@@ -87,9 +87,9 @@ export type NetEvent =
   | { t: 'crater'; x: number; y: number; r: number; f?: 1 }   // f = fire spell (burns wood)
   | { t: 'line'; x0: number; y0: number; x1: number; y1: number; r: number; f?: 1 }
   | { t: 'ice'; x: number; y: number; r: number }
-  | { t: 'boom'; x: number; y: number; r: number; c?: string }
+  | { t: 'boom'; x: number; y: number; r: number; c?: string; f?: 1 }   // f = fire spell (flames)
   | { t: 'acid'; x: number; y: number; r: number }
-  | { t: 'blood'; x: number; y: number; n: number }
+  | { t: 'blood'; x: number; y: number; n: number; dx?: number; dy?: number }   // (dx, dy) = hit direction
   | { t: 'shot'; id: string; w: WeaponId }
   | { t: 'fill'; x: number; y: number; r: number; keep: number[] }
   | { t: 'tp'; x0: number; y0: number; x1: number; y1: number }

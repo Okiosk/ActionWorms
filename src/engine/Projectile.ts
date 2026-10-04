@@ -2,6 +2,7 @@ import { CONFIG } from '../config';
 import { WeaponDef } from '../weapons/WeaponDef';
 import { Terrain } from './Terrain';
 import { ParticleManager } from './Particles';
+import { drawFx } from './Sprites';
 import { Worm } from './Worm';
 
 /** What a projectile needs from the game world. Game implements it (host only). */
@@ -58,6 +59,7 @@ export class Projectile {
   private returning: boolean = false;
   /** Rune trap armed — set by the host, synced for rendering on clients */
   public armed: boolean = false;
+  private trailTick = 0;
 
   constructor(p: ProjectileParams) {
     this.id = p.id;
@@ -110,7 +112,7 @@ export class Projectile {
     if (inWater) {
       if (this.weapon.id === 'flamer') {
         this.alive = false;
-        particles.spawn(this.x, this.y, 0, -0.5, 'smoke', undefined, 2, 20);
+        particles.spawn(this.x, this.y, 0, -0.5, 'smoke', '#9a9a9a', 5, 25);
         return;
       }
       this.vx *= 0.94;
@@ -315,353 +317,218 @@ export class Projectile {
 
   /** Magical trails (also used by clients, which only render projectiles) */
   public spawnTrail(particles: ParticleManager) {
-    const id = this.weapon.id;
+    if (this.resting) return;
+    const t = ++this.trailTick;
     const x = this.x;
     const y = this.y;
     const r = () => Math.random() - 0.5;
-    if (this.resting) return;
-    switch (id) {
+    const color = this.weapon.elementColor;
+    switch (this.weapon.id) {
       case 'bazooka':
-        particles.spawn(x, y, r() * 0.4, r() * 0.4, 'fire', undefined, 2.5, 20);
-        particles.spawn(x, y, -this.vx * 0.15, -this.vy * 0.15, 'smoke', undefined, 2.0, 25);
+        particles.spawn(x + r() * 2, y + r() * 2, r() * 0.3 - this.vx * 0.05, r() * 0.3 - this.vy * 0.05, 'fire', undefined, 6 + Math.random() * 3, 16);
+        if (t % 2 === 0) particles.spawn(x, y, -this.vx * 0.1, -this.vy * 0.1, 'smoke', undefined, 5, 35);
         break;
       case 'flamer':
-        particles.spawn(x, y, r() * 0.4, -0.3, 'fire', undefined, 2.5, 14);
+        particles.spawn(x, y, r() * 0.4, -0.3, 'fire', undefined, 5 + Math.random() * 3, 14);
+        break;
+      case 'minigun':
+        if (t % 2 === 0) particles.spawn(x, y, r() * 0.2, r() * 0.2, 'spark', color, 0.8, 10);
         break;
       case 'homing_missile':
-        particles.spawn(x, y, r() * 0.3, r() * 0.3, 'spark', '#38bdf8', 2.0, 18);
+        particles.spawn(x + r() * 3, y + r() * 3, r() * 0.3, -0.2, 'glow', color, 6, 18);
         break;
       case 'railgun':
-        particles.spawn(x, y, 0, 0, 'spark', this.weapon.elementColor, 2.0, 15);
+        particles.spawn(x, y, r() * 0.2, r() * 0.2, 'spark', color, 1.2, 14);
         break;
       case 'vortex':
-        particles.spawn(x, y, r() * 2, r() * 2, 'smoke', '#7c3aed', 3.0, 20);
+        if (t % 2 === 0) particles.spawn(x + r() * 10, y + r() * 10, r() * 0.6, r() * 0.6, 'smoke', '#2a1450', 7, 22);
         break;
       case 'acid_bomb':
-        particles.spawn(x, y, r() * 0.5, -0.5, 'spark', '#22c55e', 2.0, 15);
+        if (t % 2 === 0) particles.spawn(x, y, r() * 0.5, -0.4, 'spark', color, 1, 15);
         break;
       case 'freeze_bomb':
-        particles.spawn(x, y, r() * 0.5, -0.5, 'spark', '#bae6fd', 1.8, 15);
+        particles.spawn(x + r() * 4, y + r() * 4, r() * 0.3, 0.1, 'spark', '#dff8ff', 0.8, 18);
         break;
       case 'boomerang':
-        particles.spawn(x, y, 0, 0, 'spark', '#f59e0b', 1.5, 10);
+        if (t % 2 === 0) particles.spawn(x, y, 0, 0, 'glow', color, 6, 8);
         break;
       case 'earth_wall':
-        if (this.age % 3 === 0) particles.spawn(x, y, r() * 0.5, 0, 'dirt', undefined, 1.5, 20);
+        if (t % 3 === 0) particles.spawn(x, y, r() * 0.5, 0, 'dirt', undefined, 1.5, 20);
         break;
       case 'leech':
-        particles.spawn(x, y, r() * 0.3, r() * 0.3, 'blood', undefined, 1.2, 15);
+        particles.spawn(x, y, r() * 0.3, r() * 0.3, 'blood', undefined, 0.8, 20);
         break;
       case 'teleport':
-        particles.spawn(x + r() * 6, y + r() * 6, 0, 0, 'spark', '#b48cff', 1.5, 14);
+        particles.spawn(x + r() * 6, y + r() * 6, 0, 0, 'spark', color, 1, 14);
         break;
       case 'chain_lightning':
-        particles.spawn(x, y, r() * 1.5, r() * 1.5, 'spark', '#cff6ff', 1.2, 8);
+        particles.spawn(x, y, r() * 1.5, r() * 1.5, 'spark', '#cff6ff', 0.8, 8);
+        break;
+      case 'grenade':
+      case 'chiquita':
+        if (t % 2 === 0) particles.spawn(x, y, r() * 0.3, r() * 0.3, 'spark', color, 0.9, 16);
         break;
       case 'meteor':
         if (this.isSubCluster) {
-          particles.spawn(x, y, r() * 0.5, -0.5, 'fire', undefined, 3, 18);
-          particles.spawn(x, y, -this.vx * 0.2, -this.vy * 0.2, 'smoke', undefined, 3.0, 30);
-        } else if (this.age % 4 === 0) {
-          particles.spawn(x, y, r() * 0.3, -0.4, 'spark', '#ff9a40', 1.5, 16);
+          particles.spawn(x + r() * 3, y + r() * 3, r() * 0.5, -0.5, 'fire', undefined, 8 + Math.random() * 4, 18);
+          if (t % 2 === 0) particles.spawn(x, y, -this.vx * 0.2, -this.vy * 0.2, 'smoke', undefined, 7, 40);
+        } else if (t % 4 === 0) {
+          particles.spawn(x, y, r() * 0.3, -0.4, 'spark', '#ff9a40', 1, 16);
         }
         break;
     }
   }
 
-  public draw(ctx: CanvasRenderingContext2D, alpha: number) {
+  /** Painted glow sprites (additive), oriented along the flight direction when it matters. */
+  public draw(ctx: CanvasRenderingContext2D, alpha: number, now: number) {
     if (!this.alive) return;
     const x = this.prevX + (this.x - this.prevX) * alpha;
     const y = this.prevY + (this.y - this.prevY) * alpha;
+    const color = this.weapon.elementColor;
+    const dir = Math.atan2(this.vy, this.vx);
+    const speed = Math.hypot(this.vx, this.vy);
+    const pulse = 0.5 + 0.5 * Math.sin(now * 0.012 + this.id);
+    const spin = now * 0.006 + this.id;
 
     ctx.save();
-    const elemColor = this.weapon.elementColor;
-
-    if (this.weapon.id === 'bazooka') {
-      // Boule de Feu Majeure (Great Fireball)
-      ctx.shadowColor = '#ff4400';
-      ctx.shadowBlur = 10;
-      // Outer fire halo
-      ctx.fillStyle = '#ff4400';
-      ctx.beginPath();
-      ctx.arc(x, y, 6.5, 0, Math.PI * 2);
-      ctx.fill();
-      // Mid flame
-      ctx.fillStyle = '#ffaa00';
-      ctx.beginPath();
-      ctx.arc(x, y, 4.5, 0, Math.PI * 2);
-      ctx.fill();
-      // Inner glowing core
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.arc(x, y, 2.2, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (this.weapon.id === 'grenade' || this.weapon.id === 'chiquita') {
-      // Orbe Instable / Orbe de Scission (Arcane / Celestial Orbs)
-      const pulse = 0.5 + 0.5 * Math.sin(Date.now() * 0.015);
-      const isChiquita = this.weapon.id === 'chiquita';
-      const orbColor = isChiquita ? '#ffd700' : '#a855f7';
-      ctx.shadowColor = orbColor;
-      ctx.shadowBlur = 8;
-      ctx.fillStyle = orbColor;
-      ctx.beginPath();
-      ctx.arc(x, y, this.isSubCluster ? 3.0 : 5.0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.arc(x, y, this.isSubCluster ? 1.5 : 2.5 + pulse * 0.8, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (this.weapon.id === 'mine') {
-      // Rune Tellurique (Explosive Rune)
-      const pulse = Math.floor(Date.now() / 180) % 2 === 0;
-      ctx.shadowColor = this.armed ? '#ef4444' : '#8b5cf6';
-      ctx.shadowBlur = this.armed ? 8 : 4;
-      ctx.strokeStyle = this.armed ? (pulse ? '#ff3333' : '#aa0000') : '#8b5cf6';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(x, y, 5, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(x - 3, y);
-      ctx.lineTo(x + 3, y);
-      ctx.moveTo(x, y - 3);
-      ctx.lineTo(x, y + 3);
-      ctx.stroke();
-    } else if (this.weapon.id === 'homing_missile') {
-      // Feu Follet Traqueur (Seeking Wisp)
-      const pulse = 0.5 + 0.5 * Math.sin(Date.now() * 0.02);
-      ctx.shadowColor = '#00f0ff';
-      ctx.shadowBlur = 12;
-      ctx.fillStyle = `rgba(0, 240, 255, ${0.45 + pulse * 0.35})`;
-      ctx.beginPath();
-      ctx.arc(x, y, 6.0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#e0ffff';
-      ctx.beginPath();
-      ctx.arc(x, y, 3.2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.arc(x, y, 1.5, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (this.weapon.id === 'railgun') {
-      // Foudre Divine (Divine Lightning)
-      ctx.shadowColor = '#c084fc';
-      ctx.shadowBlur = 12;
-      ctx.strokeStyle = '#a855f7';
-      ctx.lineWidth = 4.0;
-      ctx.beginPath();
-      ctx.moveTo(x - this.vx * 0.9, y - this.vy * 0.9);
-      ctx.lineTo(x, y);
-      ctx.stroke();
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1.8;
-      ctx.stroke();
-    } else if (this.weapon.id === 'vortex') {
-      // Singularité du Néant (Void Singularity)
-      const rot = (Date.now() * 0.008) % (Math.PI * 2);
-      ctx.translate(x, y);
-      ctx.rotate(rot);
-      ctx.shadowColor = '#a855f7';
-      ctx.shadowBlur = 14;
-      ctx.strokeStyle = '#7c3aed';
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(0, 0, 7.0, 0, Math.PI * 1.6);
-      ctx.stroke();
-      ctx.fillStyle = '#060010';
-      ctx.beginPath();
-      ctx.arc(0, 0, 4.8, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (this.weapon.id === 'flamer') {
-      // Souffle du Dragon (Dragon's Breath)
-      ctx.shadowColor = '#f97316';
-      ctx.shadowBlur = 8;
-      ctx.fillStyle = '#ea580c';
-      ctx.beginPath();
-      ctx.arc(x, y, 3.8, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#fef08a';
-      ctx.beginPath();
-      ctx.arc(x, y, 1.8, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (this.weapon.id === 'acid_bomb') {
-      // Fiole Alchimique (Alchemical Flask)
-      const angle = Math.atan2(this.vy, this.vx);
-      ctx.translate(x, y);
-      ctx.rotate(angle);
-      ctx.fillStyle = '#92400e';
-      ctx.fillRect(3, -1.2, 2.5, 2.4);
-      ctx.shadowColor = '#22c55e';
-      ctx.shadowBlur = 7;
-      ctx.fillStyle = '#16a34a';
-      ctx.beginPath();
-      ctx.arc(0, 0, 5.0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = '#bbf7d0';
-      ctx.lineWidth = 1.0;
-      ctx.stroke();
-    } else if (this.weapon.id === 'freeze_bomb') {
-      // Nova de Givre (Frost Nova)
-      ctx.translate(x, y);
-      ctx.rotate((Date.now() * 0.005) % (Math.PI * 2));
-      ctx.shadowColor = '#38bdf8';
-      ctx.shadowBlur = 8;
-      ctx.fillStyle = '#bae6fd';
-      ctx.beginPath();
-      ctx.moveTo(0, -6);
-      ctx.lineTo(2, -2);
-      ctx.lineTo(6, 0);
-      ctx.lineTo(2, 2);
-      ctx.lineTo(0, 6);
-      ctx.lineTo(-2, 2);
-      ctx.lineTo(-6, 0);
-      ctx.lineTo(-2, -2);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.arc(0, 0, 2.0, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (this.weapon.id === 'boomerang') {
-      // Lame Spirituelle (Spirit Blade)
-      ctx.translate(x, y);
-      ctx.rotate((Date.now() * 0.02) % (Math.PI * 2));
-      ctx.shadowColor = '#f59e0b';
-      ctx.shadowBlur = 8;
-      ctx.fillStyle = '#f59e0b';
-      ctx.beginPath();
-      ctx.ellipse(0, 0, 7.5, 2.8, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#fef08a';
-      ctx.beginPath();
-      ctx.arc(0, 0, 2.2, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (this.weapon.id === 'shotgun') {
-      // Éclats Arcaniques (Arcane Shards)
-      const angle = Math.atan2(this.vy, this.vx);
-      ctx.translate(x, y);
-      ctx.rotate(angle);
-      ctx.shadowColor = '#c084fc';
-      ctx.shadowBlur = 5;
-      ctx.fillStyle = '#a855f7';
-      ctx.beginPath();
-      ctx.moveTo(3, 0);
-      ctx.lineTo(0, -1.8);
-      ctx.lineTo(-3, 0);
-      ctx.lineTo(0, 1.8);
-      ctx.closePath();
-      ctx.fill();
-    } else if (this.weapon.id === 'minigun') {
-      // Choc d'Étincelles (Spark Jolt)
-      ctx.shadowColor = '#fbbf24';
-      ctx.shadowBlur = 4;
-      ctx.fillStyle = '#fde047';
-      ctx.beginPath();
-      ctx.arc(x, y, 2.4, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (this.weapon.id === 'earth_wall') {
-      // Clod of enchanted earth
-      ctx.translate(x, y);
-      ctx.rotate(this.age * 0.15);
-      ctx.fillStyle = '#7a4a22';
-      ctx.strokeStyle = '#e0a060';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(-4.5, -2); ctx.lineTo(-1, -5); ctx.lineTo(4, -3.5); ctx.lineTo(5, 1.5); ctx.lineTo(1, 5); ctx.lineTo(-4, 3);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-    } else if (this.weapon.id === 'leech') {
-      // Blood bolt
-      const angle = Math.atan2(this.vy, this.vx);
-      ctx.translate(x, y);
-      ctx.rotate(angle);
-      ctx.shadowColor = '#ff1744';
-      ctx.shadowBlur = 8;
-      ctx.fillStyle = '#9b0020';
-      ctx.beginPath();
-      ctx.ellipse(0, 0, 6, 3, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#ff4d6d';
-      ctx.beginPath();
-      ctx.arc(2.5, 0, 1.8, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (this.weapon.id === 'teleport') {
-      // Swirling rift orb
-      ctx.translate(x, y);
-      ctx.rotate(this.age * 0.3);
-      ctx.shadowColor = '#b48cff';
-      ctx.shadowBlur = 10;
-      ctx.strokeStyle = '#c9a8ff';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(0, 0, 5, 0, Math.PI * 1.3);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(0, 0, 3, Math.PI, Math.PI * 2.3);
-      ctx.stroke();
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.arc(0, 0, 1.4, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (this.weapon.id === 'chain_lightning') {
-      // Crackling ball of lightning
-      ctx.shadowColor = '#9fe8ff';
-      ctx.shadowBlur = 12;
-      ctx.strokeStyle = '#e6faff';
-      ctx.lineWidth = 1;
-      for (let k = 0; k < 3; k++) {
-        const a = Math.random() * Math.PI * 2;
-        ctx.beginPath();
-        ctx.moveTo(x, y);
-        ctx.lineTo(x + Math.cos(a) * 6, y + Math.sin(a) * 6);
-        ctx.stroke();
+    ctx.globalCompositeOperation = 'lighter';
+    switch (this.weapon.id) {
+      case 'bazooka':
+        drawFx(ctx, 'circle_05', x, y, 20, '#ff5a14', 0.7);
+        drawFx(ctx, 'flame_02', x, y, 13, '#ff9a1f', 0.9, spin * 2);
+        drawFx(ctx, 'circle_05', x, y, 7, '#fff4c2', 1);
+        break;
+      case 'minigun': // Éclats Arcaniques
+        drawFx(ctx, 'trace_01', x, y, 7, color, 1, dir + Math.PI / 2, 2);
+        drawFx(ctx, 'circle_05', x, y, 9, color, 0.8);
+        drawFx(ctx, 'star_04', x, y, 6, '#ffffff', 1, dir);
+        break;
+      case 'shotgun': // Choc d'Étincelles
+        drawFx(ctx, 'circle_05', x, y, 8, color, 0.9, dir, 1 + speed * 0.3);
+        drawFx(ctx, 'star_04', x, y, 8, '#ffffff', 1, spin);
+        break;
+      case 'grenade': // Orbe du Chaos
+        drawFx(ctx, 'circle_05', x, y, 16 + pulse * 4, color, 0.7);
+        drawFx(ctx, 'magic_02', x, y, 13, color, 0.9, spin);
+        drawFx(ctx, 'circle_05', x, y, 5, '#ffffff', 1);
+        break;
+      case 'chiquita': // Comète Étoilée (and its shards)
+        if (this.isSubCluster) {
+          drawFx(ctx, 'circle_05', x, y, 9, color, 0.7);
+          drawFx(ctx, 'star_06', x, y, 9, '#ffffff', 1, spin * 2);
+        } else {
+          drawFx(ctx, 'circle_05', x, y, 18, color, 0.7);
+          drawFx(ctx, 'star_09', x, y, 16, color, 1, spin);
+          drawFx(ctx, 'circle_05', x, y, 5, '#ffffff', 1);
+        }
+        break;
+      case 'mine': { // Rune Piégée: dim while arming, blinking red once armed
+        const blink = this.armed && Math.floor(now / 180) % 2 === 0;
+        const c = this.armed ? '#ff3b2f' : color;
+        drawFx(ctx, 'magic_01', x, y, 13, c, this.armed ? (blink ? 1 : 0.55) : 0.45, now * 0.0015);
+        if (this.armed) drawFx(ctx, 'circle_05', x, y, 10, c, blink ? 0.6 : 0.25);
+        break;
       }
-      ctx.fillStyle = '#bff2ff';
-      ctx.beginPath();
-      ctx.arc(x, y, 3, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (this.weapon.id === 'meteor') {
-      if (this.isSubCluster) {
-        // Falling meteor
-        const angle = Math.atan2(this.vy, this.vx);
-        ctx.translate(x, y);
-        ctx.rotate(angle);
-        ctx.shadowColor = '#ff6600';
-        ctx.shadowBlur = 10;
-        ctx.fillStyle = '#ff8a1a';
+      case 'homing_missile': // Feu Follet
+        drawFx(ctx, 'circle_05', x, y, 16 + pulse * 5, color, 0.6);
+        drawFx(ctx, 'light_01', x, y, 11, color, 0.7, spin);
+        drawFx(ctx, 'circle_05', x, y, 5, '#e8ffff', 1);
+        break;
+      case 'railgun': // Foudre Divine
+        drawFx(ctx, 'trace_01', x - this.vx * 0.45, y - this.vy * 0.45, 7, color, 1, dir + Math.PI / 2, speed * 0.25);
+        drawFx(ctx, 'circle_05', x, y, 12, color, 0.8);
+        drawFx(ctx, 'circle_05', x, y, 5, '#ffffff', 1);
+        break;
+      case 'vortex': // Singularité du Néant
+        drawFx(ctx, 'twirl_01', x, y, 26, color, 0.9, -spin * 2);
+        drawFx(ctx, 'twirl_02', x, y, 20, '#c58bff', 0.7, -spin * 3);
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = '#05000c';
+        ctx.globalAlpha = 1;
         ctx.beginPath();
-        ctx.moveTo(-12, 0);
-        ctx.lineTo(0, -4);
-        ctx.lineTo(0, 4);
+        ctx.arc(x, y, 3.8, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+      case 'flamer': // Souffle du Dragon
+        drawFx(ctx, 'circle_05', x, y, 10, '#ff5a14', 0.6);
+        drawFx(ctx, 'flame_01', x, y, 9, '#ffb347', 0.9, spin * 3);
+        break;
+      case 'acid_bomb': // Fiole d'Alchimiste: a real flask, with a toxic glow
+        drawFx(ctx, 'circle_05', x, y, 15, color, 0.45 + pulse * 0.2);
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1;
+        ctx.translate(x, y);
+        ctx.rotate(dir);
+        ctx.fillStyle = '#8a5a2b';
+        ctx.fillRect(3, -1.1, 2.5, 2.2);
+        ctx.fillStyle = '#1ea33a';
+        ctx.beginPath();
+        ctx.arc(0, 0, 3.8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+        ctx.beginPath();
+        ctx.arc(-1.2, -1.2, 1.1, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+      case 'freeze_bomb': // Orbe de Givre
+        drawFx(ctx, 'circle_05', x, y, 16, color, 0.6);
+        drawFx(ctx, 'magic_03', x, y, 14, '#dff8ff', 1, spin);
+        break;
+      case 'boomerang': // Chakram
+        drawFx(ctx, 'slash_01', x, y, 14, color, 1, spin * 4);
+        drawFx(ctx, 'slash_01', x, y, 14, color, 1, spin * 4 + Math.PI);
+        drawFx(ctx, 'circle_05', x, y, 6, '#fff3c8', 1);
+        break;
+      case 'earth_wall': // Rempart: an enchanted clod of earth
+        drawFx(ctx, 'circle_05', x, y, 13, color, 0.35);
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1;
+        ctx.translate(x, y);
+        ctx.rotate(spin);
+        ctx.fillStyle = '#7a4a22';
+        ctx.strokeStyle = '#e0a060';
+        ctx.lineWidth = 0.8;
+        ctx.beginPath();
+        ctx.moveTo(-4.5, -2); ctx.lineTo(-1, -5); ctx.lineTo(4, -3.5); ctx.lineTo(5, 1.5); ctx.lineTo(1, 5); ctx.lineTo(-4, 3);
         ctx.closePath();
         ctx.fill();
-        ctx.fillStyle = '#4a2511';
-        ctx.beginPath();
-        ctx.arc(0, 0, 4.5, 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        // Target beacon
-        const pulse = 0.5 + 0.5 * Math.sin(this.age * 0.3);
-        ctx.shadowColor = '#ff7a1a';
-        ctx.shadowBlur = 8;
-        ctx.strokeStyle = `rgba(255, 140, 40, ${0.6 + pulse * 0.4})`;
-        ctx.lineWidth = 1.2;
-        ctx.beginPath();
-        ctx.arc(x, y, 3.5 + pulse * 1.5, 0, Math.PI * 2);
         ctx.stroke();
-        ctx.fillStyle = '#ffd08a';
-        ctx.beginPath();
-        ctx.arc(x, y, 1.6, 0, Math.PI * 2);
-        ctx.fill();
+        break;
+      case 'leech': // Sangsue Écarlate
+        drawFx(ctx, 'circle_05', x, y, 13, color, 0.7);
+        drawFx(ctx, 'trace_01', x - this.vx * 0.5, y - this.vy * 0.5, 5, color, 0.9, dir + Math.PI / 2, 2.2);
+        drawFx(ctx, 'circle_05', x, y, 4, '#ff9aa8', 1);
+        break;
+      case 'teleport': // Translocation
+        drawFx(ctx, 'twirl_02', x, y, 16, color, 1, spin * 3);
+        drawFx(ctx, 'circle_05', x, y, 6, '#ffffff', 1);
+        break;
+      case 'chain_lightning': { // Arc Foudroyant: flickering ball of lightning
+        const flick = Math.floor(now / 50) % 2 === 0;
+        drawFx(ctx, 'circle_05', x, y, 15, color, 0.7);
+        drawFx(ctx, flick ? 'spark_01' : 'spark_02', x, y, 17, '#e6faff', 1, Math.floor(now / 50) * 1.3);
+        break;
       }
-    } else {
-      // Spark générique aux couleurs du sort
-      ctx.fillStyle = elemColor;
-      ctx.beginPath();
-      ctx.arc(x, y, 2.2, 0, Math.PI * 2);
-      ctx.fill();
+      case 'meteor':
+        if (this.isSubCluster) {
+          drawFx(ctx, 'circle_05', x, y, 22, '#ff6a1a', 0.7);
+          drawFx(ctx, 'flame_05', x - this.vx * 1.2, y - this.vy * 1.2, 14, '#ffb347', 0.9, dir - Math.PI / 2, 0.8);
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = '#3b1d0c';
+          ctx.beginPath();
+          ctx.arc(x, y, 3.8, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalCompositeOperation = 'lighter';
+          drawFx(ctx, 'circle_05', x, y, 6, '#ffd08a', 0.8);
+        } else {
+          // Target beacon
+          drawFx(ctx, 'magic_01', x, y, 12 + pulse * 3, color, 0.8, now * 0.002);
+          drawFx(ctx, 'circle_05', x, y, 6, '#ffd08a', 1);
+        }
+        break;
+      default:
+        drawFx(ctx, 'circle_05', x, y, 8, color, 1);
     }
     ctx.restore();
   }

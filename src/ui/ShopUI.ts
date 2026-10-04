@@ -1,6 +1,7 @@
 import { WEAPON_REGISTRY, ALL_WEAPON_IDS, DEFAULT_WEAPON, MONEY_KILL, MONEY_DEATH } from '../weapons/WeaponRegistry';
 import { WeaponId } from '../weapons/WeaponDef';
 import { Worm } from '../engine/Worm';
+import { spellIconStyle } from '../engine/Sprites';
 
 const SPELLS = [...ALL_WEAPON_IDS].sort((a, b) => WEAPON_REGISTRY[a].price - WEAPON_REGISTRY[b].price);
 
@@ -70,14 +71,14 @@ export class ShopUI {
             const cls = [id === this.selected ? 'selected' : '', money < d.price ? 'locked' : ''].join(' ');
             return `
               <button class="spell ${cls}" data-id="${id}" style="--spell-color:${d.elementColor}">
-                <span class="icon">${d.icon}</span>
+                <span class="sicon" style="${spellIconStyle(id)}" aria-hidden="true"></span>
                 <span class="sname">${d.name}</span>
                 <span class="price ${d.price === 0 ? 'free' : ''}">${d.price === 0 ? 'Gratuit' : `${d.price} or`}</span>
               </button>`;
           }).join('')}
         </div>
         <div class="spell-detail">
-          <span class="icon">${sel.icon}</span>
+          <span class="sicon big" style="${spellIconStyle(sel.id)}" aria-hidden="true"></span>
           <div class="txt">
             <b>${sel.name}</b>
             ${sel.description}
