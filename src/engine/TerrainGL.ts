@@ -22,7 +22,7 @@ export interface TerrainView {
   time: number;     // animation ticks
 }
 
-// Mask channels: tex0 = dirt, rock, ice, crystal · tex1 = wood, mushroom, acid, water · tex2 = lava
+// Mask channels: tex0 = dirt, rock, ice, crystal · tex1 = wood, mushroom, acid, water · tex2 = lava, sand, powder
 const CHANNEL: Record<number, [number, number]> = {
   [CONFIG.MAT_DIRT]: [0, 0],
   [CONFIG.MAT_ROCK]: [0, 1],
@@ -32,7 +32,9 @@ const CHANNEL: Record<number, [number, number]> = {
   [CONFIG.MAT_BOUNCE]: [1, 1],
   [CONFIG.MAT_ACID]: [1, 2],
   [CONFIG.MAT_WATER]: [1, 3],
-  [CONFIG.MAT_LAVA]: [2, 0]
+  [CONFIG.MAT_LAVA]: [2, 0],
+  [CONFIG.MAT_SAND]: [2, 1],
+  [CONFIG.MAT_POWDER]: [2, 2]
 };
 
 const VERTEX = `#version 300 es
@@ -72,7 +74,8 @@ vec4 smoothMask(sampler2D t, vec2 uv) {
 float solidAt(vec2 uv) {
   vec4 a = texture(uMask0, uv);
   vec4 b = texture(uMask1, uv);
-  return clamp(a.r + a.g + a.b + a.a + b.r + b.g + b.b, 0.0, 1.0);
+  vec4 c = texture(uMask2, uv);
+  return clamp(a.r + a.g + a.b + a.a + b.r + b.g + b.b + c.g + c.b, 0.0, 1.0);
 }
 
 float liquidAt(vec2 uv) {
@@ -119,9 +122,11 @@ void main() {
 
   vec4 m0 = clamp(smoothMask(uMask0, uv), 0.0, 1.0);
   vec4 m1 = clamp(smoothMask(uMask1, uv), 0.0, 1.0);
+  vec4 m2 = clamp(smoothMask(uMask2, uv), 0.0, 1.0);
   float dirt = m0.r, rock = m0.g, ice = m0.b, crystal = m0.a;
   float wood = m1.r, bounce = m1.g, acid = m1.b;
-  float total = clamp(dirt + rock + ice + crystal + wood + bounce + acid, 0.0, 1.0);
+  float sand = m2.g, powder = m2.b;
+  float total = clamp(dirt + rock + ice + crystal + wood + bounce + acid + sand + powder, 0.0, 1.0);
   float fw = max(fwidth(total), 0.02);
   float alpha = smoothstep(0.5 - fw, 0.5 + fw, total);
   if (alpha <= 0.0) { outColor = vec4(bg, 1.0); return; }
@@ -129,7 +134,8 @@ void main() {
   // Sharpened soft-max between materials: smooth but crisp borders
   float wd = pow(dirt, 6.0), wr = pow(rock, 6.0), wi = pow(ice, 6.0), wc = pow(crystal, 6.0);
   float ww = pow(wood, 6.0), wb = pow(bounce, 6.0), wa = pow(acid, 6.0);
-  float wsum = wd + wr + wi + wc + ww + wb + wa + 1e-5;
+  float ws = pow(sand, 6.0), wp = pow(powder, 6.0);
+  float wsum = wd + wr + wi + wc + ww + wb + wa + ws + wp + 1e-5;
 
   vec3 col = vec3(0.0);
   float above = solidAt(uv - vec2(0.0, 2.2) * texel);
@@ -186,6 +192,18 @@ void main() {
     float bubble = smoothstep(0.85, 0.95, texture(uNoise, world / 40.0 + vec2(0.0, uTime * 0.002)).a);
     vec3 c = vec3(0.10, 0.85, 0.12) * pulse * (0.85 + 0.2 * N.g) + bubble * 0.25;
     col += c * wa;
+  }
+  if (ws > 0.0005) {
+    // Sand: fine grain and wind ripples
+    float ripple = sin(world.x * 0.55 + sin(world.y * 0.35) * 2.0 + N.r * 3.0);
+    vec3 c = vec3(0.87, 0.73, 0.46) * (0.86 + 0.08 * ripple + 0.12 * F.a + 0.06 * N.g) + exposedTop * 0.10;
+    col += c * ws;
+  }
+  if (wp > 0.0005) {
+    // Blasting powder: dark red grains with flickering embers
+    float ember = pow(F.a, 14.0) * (0.6 + 0.4 * sin(uTime * 0.15 + N.r * 40.0));
+    vec3 c = vec3(0.42, 0.12, 0.09) * (0.7 + 0.35 * N.b + 0.2 * F.r) + vec3(1.0, 0.65, 0.2) * ember * 1.4;
+    col += c * wp;
   }
   col /= wsum;
 
@@ -404,7 +422,7 @@ export class TerrainGL {
         const p = i * 4;
         a[p] = a[p + 1] = a[p + 2] = a[p + 3] = 0;
         b[p] = b[p + 1] = b[p + 2] = b[p + 3] = 0;
-        c[p] = 0;
+        c[p] = c[p + 1] = c[p + 2] = 0;
         const ch = CHANNEL[t.materials[i]];
         if (ch) data[ch[0]][p + ch[1]] = 255;
       }

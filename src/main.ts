@@ -67,7 +67,7 @@ window.addEventListener('DOMContentLoaded', () => {
   };
 
   game.onLocalDeath = (worm) => {
-    shop.show(worm, (weaponId) => game.chooseWeapon(weaponId));
+    shop.show(worm, (weaponId) => game.chooseWeapon(weaponId), game.rules.freeSpells);
   };
 
   game.onKill = (killer, victim, cause) => hud.showKill(killer, victim, cause);

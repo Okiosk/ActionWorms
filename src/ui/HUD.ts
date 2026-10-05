@@ -3,6 +3,7 @@ import { CONFIG } from '../config';
 import { Game } from '../engine/Game';
 import { sound } from '../engine/SoundEffects';
 import { KillCause } from '../net/Protocol';
+import { MUTATORS } from '../engine/Mutators';
 
 function esc(str: string): string {
   return str.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -23,7 +24,10 @@ export class HUD {
   private reloadFill: HTMLElement;
   private money: HTMLElement;
   private net: HTMLElement;
+  private mutators: HTMLElement;
+  private windEl: HTMLElement;
   private lastScoreHtml = '';
+  private lastMutKey = '';
 
   constructor(container: HTMLElement) {
     this.root = container;
@@ -35,7 +39,11 @@ export class HUD {
         <button class="hud-box icon-btn" id="hud-fs" title="Plein écran (F11)">⛶</button>
         <div class="hud-box net-pill" id="hud-net"><span class="led"></span><span></span></div>
       </div>
-      <div class="hud-box hud-objective" id="hud-objective"></div>
+      <div class="hud-objective-wrap">
+        <div class="hud-box hud-objective" id="hud-objective"></div>
+        <div class="hud-mutators" id="hud-mutators"></div>
+        <div class="hud-wind" id="hud-wind"></div>
+      </div>
       <div class="killfeed" id="hud-killfeed"></div>
       <div class="hud-box scoreboard" id="hud-scoreboard"></div>
       <div class="hud-box status-box" id="hud-status">
@@ -68,6 +76,8 @@ export class HUD {
     this.reloadFill = q('#hud-reload');
     this.money = q('#hud-money');
     this.net = q('#hud-net');
+    this.mutators = q('#hud-mutators');
+    this.windEl = q('#hud-wind');
 
     const muteBtn = q('#hud-mute');
     const syncMute = () => { muteBtn.textContent = sound.enabled ? '🔊' : '🔇'; };
@@ -121,6 +131,17 @@ export class HUD {
       this.objective.textContent = `⚔️ Premier à ${mods.fragLimit} frags`;
     }
 
+    // Active mutators (icons, name on hover) and the storm
+    const mutKey = mods.mutators.join(',');
+    if (mutKey !== this.lastMutKey) {
+      this.lastMutKey = mutKey;
+      this.mutators.innerHTML = MUTATORS.filter(m => mods.mutators.includes(m.id))
+        .map(m => `<span title="${esc(m.name)} — ${esc(m.desc)}">${m.icon}</span>`).join('');
+    }
+    const w = mods.mutators.includes('wind') ? game.wind : 0;
+    const strength = Math.min(3, Math.ceil(Math.abs(w) / 0.009));
+    this.windEl.textContent = w === 0 ? '' : `🌬️ ${w < 0 ? '←'.repeat(strength) : '→'.repeat(strength)}`;
+
     // Network status
     const netText = this.net.lastElementChild as HTMLElement;
     const stalled = game.role === 'client' && performance.now() - game.net.lastPacketTime > 1500;
@@ -155,12 +176,12 @@ export class HUD {
     this.hpFill.className = pct < 30 ? 'crit' : pct < 60 ? 'warn' : '';
     this.hpVal.textContent = String(Math.ceil(local.health));
 
-    const w = local.weapon;
-    if (this.weaponIcon.dataset.id !== w.id) {
-      this.weaponIcon.dataset.id = w.id;
-      this.weaponIcon.setAttribute('style', spellIconStyle(w.id));
+    const weapon = local.weapon;
+    if (this.weaponIcon.dataset.id !== weapon.id) {
+      this.weaponIcon.dataset.id = weapon.id;
+      this.weaponIcon.setAttribute('style', spellIconStyle(weapon.id));
     }
-    this.weaponName.textContent = w.name;
+    this.weaponName.textContent = weapon.name;
     if (local.sheepTimer > 0) {
       this.ammo.textContent = 'Bêêê !';
       this.reloadFill.style.width = '0%';
@@ -168,8 +189,9 @@ export class HUD {
       // Only a short cooldown between two casts
       const ready = local.shotCooldown <= 0;
       this.ammo.textContent = ready ? 'Prêt' : `${(local.shotCooldown / 60).toFixed(1)} s`;
-      this.reloadFill.style.width = ready ? '100%' : `${100 - (local.shotCooldown / w.cooldown) * 100}%`;
+      const total = Math.max(1, Math.round(weapon.cooldown * local.rules.cooldownScale));
+      this.reloadFill.style.width = ready ? '100%' : `${100 - (local.shotCooldown / total) * 100}%`;
     }
-    this.money.textContent = `✨ ${local.money} or`;
+    this.money.textContent = game.rules.freeSpells ? '✨ Grimoire ouvert' : `✨ ${local.money} or`;
   }
 }

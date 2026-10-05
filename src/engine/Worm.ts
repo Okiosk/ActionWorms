@@ -5,7 +5,9 @@ import { Terrain } from './Terrain';
 import { NinjaRope } from './NinjaRope';
 import { ParticleManager } from './Particles';
 import { MatchModifiers, DEFAULT_MODIFIERS } from '../net/Protocol';
-import { drawWizard, drawFx, WizardAnim } from './Sprites';
+import { Rules, rulesOf } from './Mutators';
+import { WORLD_ENV } from './Env';
+import { drawWizard, drawFx, WizardAnim, setFxAlpha } from './Sprites';
 
 export interface WormInput {
   left: boolean;
@@ -56,7 +58,9 @@ export class Worm {
   public aimAngle: number = 0;
 
   // State
-  public modifiers: MatchModifiers = { ...DEFAULT_MODIFIERS };
+  public rules: Rules = rulesOf(DEFAULT_MODIFIERS.mutators);
+  /** Ticks before this wizard can go through a portal again */
+  public portalCooldown = 0;
   public maxHealth: number = 100;
   public health: number = 0;
   public frags: number = 0;
@@ -108,10 +112,10 @@ export class Worm {
   }
 
   public applyModifiers(mods: MatchModifiers) {
-    this.modifiers = { ...mods };
+    this.rules = rulesOf(mods.mutators);
     this.maxHealth = mods.maxHealth;
     this.health = Math.min(this.health, this.maxHealth);
-    this.rope.setReach(mods.ropeReach);
+    this.rope.setReach(this.rules.ropeReach);
   }
 
   public spawn(x: number, y: number) {
@@ -192,8 +196,8 @@ export class Worm {
     if (!fx || frozen) return;
 
     // HP regeneration (HP per second)
-    if (this.modifiers.regenRate > 0) {
-      this.regenAccum += this.modifiers.regenRate / 60;
+    if (this.rules.regenRate > 0) {
+      this.regenAccum += this.rules.regenRate / 60;
       if (this.regenAccum >= 1) {
         const healed = Math.floor(this.regenAccum);
         this.regenAccum -= healed;
@@ -210,7 +214,8 @@ export class Worm {
     const groundMat = this.grounded ? this.groundMaterial(terrain) : CONFIG.MAT_AIR;
     const inFluid = terrain.fluidAt(this.x, this.y) !== 0;
     // Liquids: strong buoyancy, the wizard sinks slowly
-    const g = CONFIG.GRAVITY * this.modifiers.gravity * (inFluid ? 0.2 : 1);
+    const g = CONFIG.GRAVITY * this.rules.gravity * (inFluid ? 0.2 : 1) * WORLD_ENV.gravityAt(this.x, this.y);
+    if (this.portalCooldown > 0) this.portalCooldown--;
 
     if (this.sheepTimer > 0) this.sheepTimer--;
     if (this.drunkTimer > 0) this.drunkTimer--;
@@ -260,7 +265,7 @@ export class Worm {
     this.ropeHeld = input.rope;
 
     const attached = this.rope.isAttached();
-    const speedMod = this.modifiers.wormSpeed;
+    const speedMod = this.rules.wormSpeed;
     const walk = CONFIG.WORM_WALK_SPEED * speedMod * (sheep ? 1.35 : 1);
     // Drunk: left and right are swapped
     const moveDir = ((input.left ? -1 : 0) + (input.right ? 1 : 0)) * (this.drunkTimer > 0 ? -1 : 1);
@@ -316,7 +321,7 @@ export class Worm {
     }
 
     if (input.jump && this.grounded && !attached) {
-      this.vy = -CONFIG.WORM_JUMP_FORCE * (sheep ? 1.3 : 1);
+      this.vy = -CONFIG.WORM_JUMP_FORCE * this.rules.jump * (sheep ? 1.3 : 1) * Math.sign(g || 1);
       this.grounded = false;
     }
 
@@ -343,12 +348,15 @@ export class Worm {
   }
 
   private applyGravity(g: number) {
-    if (this.grounded && this.vy >= 0) {
+    if (this.grounded && this.vy >= 0 && g >= 0) {
       // Resting on the ground. Upward velocity (jump, blast) is left untouched.
       this.vy = 0;
     } else {
-      this.vy = Math.min(CONFIG.MAX_FALL_SPEED, this.vy + g);
+      // (negative gravity inside an anomaly: falls upwards)
+      this.vy = Math.max(-CONFIG.MAX_FALL_SPEED, Math.min(CONFIG.MAX_FALL_SPEED, this.vy + g));
     }
+    // Storm: the wind pushes wizards that are in the air
+    if (WORLD_ENV.wind !== 0 && !this.grounded && !this.rope.isAttached()) this.vx += WORLD_ENV.wind;
   }
 
   /** Removes the outward radial velocity when the tether is taut and caps the swing speed. */
@@ -364,7 +372,7 @@ export class Worm {
       this.vx -= ox * radialVel;
       this.vy -= oy * radialVel;
     }
-    const max = CONFIG.ROPE_MAX_SWING_SPEED * this.modifiers.wormSpeed;
+    const max = CONFIG.ROPE_MAX_SWING_SPEED * this.rules.wormSpeed;
     const spd = Math.hypot(this.vx, this.vy);
     if (spd > max) {
       this.vx *= max / spd;
@@ -375,7 +383,7 @@ export class Worm {
   /** A cast, then a short cooldown. A sheep cannot cast. */
   private attemptFire(onShoot: (worm: Worm, weapon: WeaponDef, angle: number) => void) {
     if (this.shotCooldown > 0 || this.sheepTimer > 0) return;
-    this.shotCooldown = this.weapon.cooldown;
+    this.shotCooldown = Math.max(1, Math.round(this.weapon.cooldown * this.rules.cooldownScale));
     onShoot(this, this.weapon, this.aimAngle);
   }
 
@@ -547,13 +555,31 @@ export class Worm {
     }
   }
 
-  public draw(ctx: CanvasRenderingContext2D, alpha: number, isLocal: boolean, terrain: Terrain, now: number) {
+  /** `ghost`: Fantômes mutator — almost invisible unless casting or hurt */
+  public draw(ctx: CanvasRenderingContext2D, alpha: number, isLocal: boolean, terrain: Terrain, now: number, ghost = false) {
     if (!this.isAlive()) {
       this.seenHealth = 0;
       return;
     }
     this.animTimer++;
     this.updatePose(terrain, now);
+    if (ghost) {
+      const since = Math.min(now - this.castAt, now - this.hurtAt, now - this.shockedAt);
+      const vis = since < 900 ? 1 : since < 1500 ? 1 - ((since - 900) / 600) * 0.94 : 0.06;
+      if (vis < 0.99) {
+        ctx.save();
+        ctx.globalAlpha = vis;
+        setFxAlpha(vis);
+        this.drawBody(ctx, alpha, isLocal, terrain, now);
+        setFxAlpha(1);
+        ctx.restore();
+        return;
+      }
+    }
+    this.drawBody(ctx, alpha, isLocal, terrain, now);
+  }
+
+  private drawBody(ctx: CanvasRenderingContext2D, alpha: number, isLocal: boolean, _terrain: Terrain, now: number) {
 
     const px = this.prevX + (this.x - this.prevX) * alpha;
     const py = this.prevY + (this.y - this.prevY) * alpha;

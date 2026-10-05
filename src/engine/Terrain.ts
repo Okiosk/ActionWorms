@@ -5,10 +5,12 @@ import { fxSprite, FxName } from './Sprites';
 export type { MapType };
 
 const { MAT_AIR: AIR, MAT_DIRT: DIRT, MAT_ROCK: ROCK, MAT_ACID: ACID, MAT_ICE: ICE, MAT_WATER: WATER,
-  MAT_CRYSTAL: CRYSTAL, MAT_WOOD: WOOD, MAT_LAVA: LAVA, MAT_BOUNCE: BOUNCE } = CONFIG;
+  MAT_CRYSTAL: CRYSTAL, MAT_WOOD: WOOD, MAT_LAVA: LAVA, MAT_BOUNCE: BOUNCE, MAT_SAND: SAND, MAT_POWDER: POWDER } = CONFIG;
 
 /** Materials removed by explosions (wood only partially, unless the spell is a fire spell) */
-const DESTRUCTIBLE = new Set([DIRT, ICE, CRYSTAL, WOOD, BOUNCE]);
+const DESTRUCTIBLE = new Set([DIRT, ICE, CRYSTAL, WOOD, BOUNCE, SAND, POWDER]);
+/** Cells sand can fall through */
+const FREE = (m: number) => m === AIR || m === WATER || m === LAVA;
 /** Blood decal colours and splat shapes */
 const BLOOD_STAIN = ['#7d0a0a', '#640606', '#931010'];
 const SPLATS: FxName[] = ['dirt_01', 'dirt_02', 'dirt_03'];
@@ -18,6 +20,8 @@ const WOOD_RESISTANCE = 0.4;
 export interface CarveResult {
   modified: boolean;
   crystals: number; // crystal pixels destroyed (→ gold for the caster)
+  /** Blasting powder pixels destroyed, flat [x, y, …] (→ chain explosions, host) */
+  powder: number[];
 }
 
 type RGB = [number, number, number];
@@ -63,6 +67,8 @@ export class Terrain {
   /** Regions where materials changed / blood was added, in order */
   public readonly changes = new ChangeLog();
   public readonly stains = new ChangeLog();
+  /** Called when sand collapsed (rectangle that moved), for dust effects */
+  public onSandFall: ((x0: number, y0: number, x1: number, y1: number) => void) | null = null;
 
   constructor(width: number = CONFIG.MAP_WIDTH, height: number = CONFIG.MAP_HEIGHT) {
     this.width = width;
@@ -123,6 +129,7 @@ export class Terrain {
       }
     }
 
+    this.settleSand(0, this.width - 1, false);
     this.renderAll(rand);
   }
 
@@ -187,7 +194,7 @@ export class Terrain {
     const maxX = Math.min(this.width - 1, Math.ceil(fx1));
     const minY = Math.max(0, Math.floor(fy0));
     const maxY = Math.min(this.height - 1, Math.ceil(fy1));
-    const result: CarveResult = { modified: false, crystals: 0 };
+    const result: CarveResult = { modified: false, crystals: 0, powder: [] };
     if (minX > maxX || minY > maxY) return result;
 
     const changed: number[] = [];
@@ -200,6 +207,7 @@ export class Terrain {
         if (d > 1) continue;
         if (m === WOOD && !fire && d > WOOD_RESISTANCE) continue;
         if (m === CRYSTAL) result.crystals++;
+        else if (m === POWDER) result.powder.push(x, y);
         this.materials[idx] = AIR;
         changed.push(x, y);
       }
@@ -214,8 +222,116 @@ export class Terrain {
       }
       this.groundCtx.putImageData(img, minX, minY);
       this.clearStains(changed, minX, minY, maxX, maxY);
+      this.settleSand(minX, maxX, true);
     }
     return result;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Sand: falls straight down, then slides sideways into 45° piles.
+  // Pure function of the grid → identical for every player (runs inside the carve).
+  // ══════════════════════════════════════════════════════════════════════════
+
+  private settleSand(x0: number, x1: number, repaint: boolean) {
+    const W = this.width;
+    const H = this.height;
+    const m = this.materials;
+    let bx0 = W, by0 = H, bx1 = -1, by1 = -1;
+    const touch = (x: number, y: number) => {
+      if (x < bx0) bx0 = x;
+      if (x > bx1) bx1 = x;
+      if (y < by0) by0 = y;
+      if (y > by1) by1 = y;
+    };
+    // Only the columns where something may still move are scanned
+    let active = new Uint8Array(W);
+    for (let x = Math.max(1, x0 - 1); x <= Math.min(W - 2, x1 + 1); x++) active[x] = 1;
+    for (let iter = 0; iter < 200; iter++) {
+      const cols: number[] = [];
+      for (let x = 1; x < W - 1; x++) if (active[x]) cols.push(x);
+      if (cols.length === 0) break;
+      const next = new Uint8Array(W);
+      const wake = (x: number) => {
+        if (x > 0) next[x - 1] = 1;
+        next[x] = 1;
+        if (x < W - 1) next[x + 1] = 1;
+      };
+      // 1. Columns collapse
+      for (const x of cols) {
+        let empty = -1;
+        for (let y = H - 2; y >= 0; y--) {
+          const i = y * W + x;
+          const v = m[i];
+          if (FREE(v)) {
+            if (empty < 0) empty = y;
+          } else if (v === SAND && empty >= 0) {
+            const j = empty * W + x;
+            m[i] = m[j];
+            m[j] = SAND;
+            touch(x, y);
+            touch(x, empty);
+            empty--;
+            wake(x);
+          } else {
+            empty = -1;
+          }
+        }
+      }
+      // 2. Grains on a steep edge slide down one step diagonally
+      const leftFirst = iter % 2 === 0;
+      if (!leftFirst) cols.reverse();
+      const dirs = leftFirst ? [-1, 1] : [1, -1];
+      for (let y = H - 3; y >= 1; y--) {
+        for (const x of cols) {
+          const i = y * W + x;
+          if (m[i] !== SAND || FREE(m[i + W])) continue;
+          for (const d of dirs) {
+            const nx = x + d;
+            if (nx < 1 || nx > W - 2) continue;
+            if (FREE(m[i + d]) && FREE(m[i + W + d])) {
+              const j = i + W + d;
+              m[i] = m[j];
+              m[j] = SAND;
+              touch(x, y);
+              touch(nx, y + 1);
+              wake(x);
+              wake(nx);
+              break;
+            }
+          }
+        }
+      }
+      active = next;
+    }
+    if (bx1 < 0 || !repaint) return;
+    this.repaintRect(bx0, by0, bx1, by1);
+    this.onSandFall?.(bx0, by0, bx1, by1);
+  }
+
+  /** Repaints every non-rock layer of a rectangle from the material grid. */
+  private repaintRect(x0: number, y0: number, x1: number, y1: number) {
+    const W = this.width;
+    const w = x1 - x0 + 1;
+    const h = y1 - y0 + 1;
+    const ground = this.groundCtx.getImageData(x0, y0, w, h);
+    const acid = this.acidCtx.getImageData(x0, y0, w, h);
+    const liquid = this.liquidCtx.getImageData(x0, y0, w, h);
+    const changed: number[] = [];
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const p = ((y - y0) * w + (x - x0)) * 4;
+        const mat = this.materials[y * W + x];
+        if (mat === ROCK) continue;
+        ground.data[p + 3] = acid.data[p + 3] = liquid.data[p + 3] = 0;
+        if (mat !== AIR) this.paintPixel(mat, x, y, Math.random, ground.data, acid.data, liquid.data, p);
+        if (mat === AIR || mat === WATER || mat === LAVA) changed.push(x, y);
+      }
+    }
+    this.groundCtx.putImageData(ground, x0, y0);
+    this.acidCtx.putImageData(acid, x0, y0);
+    this.liquidCtx.putImageData(liquid, x0, y0);
+    this.markDirty(x0, y0, x1, y1);
+    if (changed.length) this.clearStains(changed, x0, y0, x1, y1);
   }
 
   /** Blood disappears with the pixels it was on (flat [x, y, …] list inside the rect). */
@@ -271,7 +387,10 @@ export class Terrain {
     this.acidCtx.putImageData(acid, minX, minY);
     this.liquidCtx.putImageData(liquid, minX, minY);
     this.markDirty(minX, minY, maxX, maxY);
-    if (changed.length > 0) this.clearStains(changed, minX, minY, maxX, maxY);
+    if (changed.length > 0) {
+      this.clearStains(changed, minX, minY, maxX, maxY);
+      this.settleSand(minX, maxX, true);
+    }
   }
 
   private markDirty(x0: number, y0: number, x1: number, y1: number) {
@@ -300,6 +419,26 @@ export class Terrain {
       }
       return DIRT;
     });
+  }
+
+  /** Rising lava (or water): every free pixel below `level` is filled. */
+  public flood(level: number, water: boolean) {
+    const W = this.width;
+    const target = water ? WATER : LAVA;
+    let x0 = W, y0 = this.height, x1 = -1, y1 = -1;
+    for (let y = Math.max(0, level); y < this.height; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        const m = this.materials[i];
+        if (m !== AIR && (water || m !== WATER)) continue;
+        this.materials[i] = target;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+    }
+    if (x1 >= 0) this.repaintRect(x0, y0, x1, y1);
   }
 
   /** Frost orb: water freezes into (walkable, slippery) ice. Returns true if anything froze. */
@@ -518,6 +657,17 @@ export class Terrain {
         c = spot ? [255, 225, 240] : shade([225, 70, 155], n * 20 + (this.airAbove(x, y, 2) ? 25 : 0));
         break;
       }
+      case SAND: {
+        // Fine grains with soft ripples, lighter where the wind touches it
+        const ripple = Math.sin(x * 0.35 + Math.sin(y * 0.5) * 1.5) * 6;
+        c = shade([222, 186, 116], n * 26 + ripple + (this.airAbove(x, y, 2) ? 14 : 0));
+        break;
+      }
+      case POWDER: {
+        // Dark red grains with glowing sparks
+        c = rand() < 0.06 ? [255, 190, 70] : shade([118, 34, 28], n * 40 + ((x * 7 + y * 3) % 5 === 0 ? -25 : 0));
+        break;
+      }
       case ACID:
         target = acid;
         c = [20, Math.floor(220 + n * 35), Math.floor(20 + n * 20)];
@@ -653,6 +803,78 @@ export class Terrain {
         }
         mountains('rgba(30, 45, 80, 0.85)', H * 0.62, 170, 40);
         break;
+      case 'desert': {
+        stars(110, H * 0.45);
+        ctx.fillStyle = 'rgba(255, 220, 170, 0.8)';
+        ctx.beginPath();
+        ctx.arc(W * 0.2, H * 0.18, 26, 0, Math.PI * 2);
+        ctx.fill();
+        // Far dunes and a distant pyramid
+        ctx.fillStyle = 'rgba(70, 36, 34, 0.75)';
+        ctx.beginPath();
+        ctx.moveTo(W * 0.66, H * 0.6);
+        ctx.lineTo(W * 0.76, H * 0.42);
+        ctx.lineTo(W * 0.86, H * 0.6);
+        ctx.fill();
+        for (const [color, base, amp] of [['rgba(92, 46, 38, 0.8)', H * 0.62, 30], ['rgba(60, 30, 30, 0.9)', H * 0.7, 40]] as const) {
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.moveTo(0, H);
+          const ph = rand() * 6;
+          for (let x = 0; x <= W; x += 10) ctx.lineTo(x, base - (Math.sin(x * 0.008 + ph) * 0.5 + 0.5) * amp);
+          ctx.lineTo(W, H);
+          ctx.fill();
+        }
+        break;
+      }
+      case 'mine':
+        // Timbering in the dark and a few hanging lanterns
+        ctx.strokeStyle = 'rgba(70, 46, 28, 0.45)';
+        ctx.lineWidth = 6;
+        for (let x = 20; x < W; x += 70 + rand() * 30) {
+          ctx.beginPath();
+          ctx.moveTo(x, H);
+          ctx.lineTo(x, 60);
+          ctx.stroke();
+        }
+        for (let y = 90; y < H; y += 90 + rand() * 30) {
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(W, y);
+          ctx.stroke();
+        }
+        for (let i = 0; i < 14; i++) {
+          const x = rand() * W;
+          const y = 70 + rand() * (H - 90);
+          const glow = ctx.createRadialGradient(x, y, 0, x, y, 22);
+          glow.addColorStop(0, 'rgba(255, 190, 90, 0.35)');
+          glow.addColorStop(1, 'rgba(255, 190, 90, 0)');
+          ctx.fillStyle = glow;
+          ctx.fillRect(x - 22, y - 22, 44, 44);
+        }
+        break;
+      case 'clock': {
+        stars(90, H * 0.6);
+        // Huge gears turning in the background (static silhouettes)
+        const gear = (gx: number, gy: number, r: number, teeth: number) => {
+          ctx.fillStyle = 'rgba(70, 64, 90, 0.35)';
+          ctx.beginPath();
+          for (let i = 0; i <= teeth * 2; i++) {
+            const a = (i / (teeth * 2)) * Math.PI * 2;
+            const rr = i % 2 === 0 ? r : r * 0.86;
+            ctx.lineTo(gx + Math.cos(a) * rr, gy + Math.sin(a) * rr);
+          }
+          ctx.fill();
+          ctx.fillStyle = 'rgba(20, 22, 40, 0.9)';
+          ctx.beginPath();
+          ctx.arc(gx, gy, r * 0.3, 0, Math.PI * 2);
+          ctx.fill();
+        };
+        gear(W * 0.18, H * 0.3, 90, 18);
+        gear(W * 0.8, H * 0.6, 120, 24);
+        gear(W * 0.42, H * 0.82, 60, 12);
+        break;
+      }
       case 'sky':
         stars(100, H * 0.5);
         for (let i = 0; i < 14; i++) {

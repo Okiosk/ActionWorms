@@ -478,6 +478,8 @@ export class SoundEffects {
       case 'vortex':
       case 'teleport':
       case 'swap':
+      case 'portal':
+      case 'antigravity':
         this.playSpellSample(4, 1.1);
         this.playVortex();
         break;
@@ -485,8 +487,13 @@ export class SoundEffects {
         this.playSpellSample(4, 1.1);
         this.playHoming();
         break;
+      case 'tornado':
+        this.noise('bandpass', 400, 1600, 0.9, 0.3, 0.6);
+        break;
       case 'boomerang':
       case 'bubble':
+      case 'hot_potato':
+      case 'decoy':
         this.playSpellSample(1, 0.9);
         this.playBouncy();
         break;

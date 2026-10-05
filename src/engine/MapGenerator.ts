@@ -5,7 +5,7 @@ import { CONFIG } from '../config';
  * Terrain then paints them with the map's theme.
  */
 
-export type MapType = 'cave' | 'volcano' | 'forest' | 'citadel' | 'glacier' | 'sky';
+export type MapType = 'cave' | 'volcano' | 'forest' | 'citadel' | 'glacier' | 'sky' | 'desert' | 'mine' | 'hourglass';
 
 type RGB = [number, number, number];
 
@@ -17,7 +17,7 @@ export interface MapTheme {
   leaves?: RGB;          // forest canopy colour
   rock: RGB;
   bricks?: boolean;      // rock drawn as masonry
-  backdrop: 'cave' | 'volcano' | 'forest' | 'citadel' | 'glacier' | 'sky';
+  backdrop: 'cave' | 'volcano' | 'forest' | 'citadel' | 'glacier' | 'sky' | 'desert' | 'mine' | 'clock';
 }
 
 export const MAP_THEMES: Record<MapType, MapTheme> = {
@@ -26,7 +26,10 @@ export const MAP_THEMES: Record<MapType, MapTheme> = {
   forest:  { skyTop: '#0e2230', skyBottom: '#06110d', dirt: [100, 68, 40], surface: [70, 150, 55], leaves: [46, 118, 44], rock: [92, 96, 96], backdrop: 'forest' },
   citadel: { skyTop: '#1e1534', skyBottom: '#0b0814', dirt: [118, 88, 60], surface: [78, 128, 58], rock: [122, 118, 128], bricks: true, backdrop: 'citadel' },
   glacier: { skyTop: '#0c1733', skyBottom: '#050a18', dirt: [104, 96, 92], surface: [232, 238, 250], rock: [74, 84, 102], backdrop: 'glacier' },
-  sky:     { skyTop: '#22306a', skyBottom: '#0f1533', dirt: [122, 82, 46], surface: [92, 172, 72], rock: [96, 96, 108], backdrop: 'sky' }
+  sky:     { skyTop: '#22306a', skyBottom: '#0f1533', dirt: [122, 82, 46], surface: [92, 172, 72], rock: [96, 96, 108], backdrop: 'sky' },
+  desert:  { skyTop: '#1b1436', skyBottom: '#7a3f2c', dirt: [168, 112, 70], surface: null, rock: [176, 136, 92], bricks: true, backdrop: 'desert' },
+  mine:    { skyTop: '#140e0a', skyBottom: '#070504', dirt: [92, 66, 48], surface: null, rock: [74, 74, 82], backdrop: 'mine' },
+  hourglass: { skyTop: '#141a33', skyBottom: '#06080f', dirt: [104, 84, 66], surface: [96, 150, 70], rock: [150, 128, 92], bricks: true, backdrop: 'clock' }
 };
 
 export interface GeneratedLayout {
@@ -34,7 +37,7 @@ export interface GeneratedLayout {
 }
 
 const { MAT_AIR: AIR, MAT_DIRT: DIRT, MAT_ROCK: ROCK, MAT_ACID: ACID, MAT_ICE: ICE, MAT_WATER: WATER,
-  MAT_CRYSTAL: CRYSTAL, MAT_WOOD: WOOD, MAT_LAVA: LAVA, MAT_BOUNCE: BOUNCE } = CONFIG;
+  MAT_CRYSTAL: CRYSTAL, MAT_WOOD: WOOD, MAT_LAVA: LAVA, MAT_BOUNCE: BOUNCE, MAT_SAND: SAND, MAT_POWDER: POWDER } = CONFIG;
 
 const BORDER = 10;
 
@@ -49,6 +52,9 @@ export function generateLayout(
     case 'citadel': genCitadel(g, hazards); break;
     case 'glacier': genGlacier(g); break;
     case 'sky': genSky(g, hazards); break;
+    case 'desert': genDesert(g, hazards); break;
+    case 'mine': genMine(g, hazards); break;
+    case 'hourglass': genHourglass(g, hazards); break;
     case 'cave':
     default: genCave(g, hazards); break;
   }
@@ -728,4 +734,271 @@ function genSky(g: Grid, hazards: boolean) {
     const y = g.r(30, H * 0.8);
     if (g.get(x, y) === AIR && g.get(x, y + 12) === AIR && g.get(x, y - 12) === AIR) g.blob(x, y, g.r(3, 5), ROCK);
   }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Pyramide des Sables — dunes over hidden caves, a pyramid with a trapped tomb, an oasis
+// ═════════════════════════════════════════════════════════════════════════════
+
+function genDesert(g: Grid, hazards: boolean) {
+  const { W, H } = g;
+  g.fill(AIR);
+  const cx = W / 2;
+
+  // Sandstone bedrock with dunes of loose sand on top
+  const dune = g.fbm(110, 2);
+  const rockLine = new Int16Array(W);
+  const sandTop = new Int16Array(W);
+  for (let x = 0; x < W; x++) {
+    rockLine[x] = Math.round(H * 0.74 + (dune(x, 300) - 0.5) * 30);
+    sandTop[x] = Math.round(rockLine[x] - 18 - dune(x, 0) * 55);
+    g.rect(x, rockLine[x], x, H, DIRT);
+    g.rect(x, sandTop[x], x, rockLine[x] - 1, SAND);
+  }
+  g.rect(0, H - 22, W, H, ROCK);
+
+  // Caves in the sandstone — some right under the dunes: blast their roof and the sand pours in
+  const caves = g.fbm(40, 2);
+  for (let y = 0; y < H - 24; y++) {
+    for (let x = 0; x < W; x++) {
+      if (y > rockLine[x] + 8 && caves(x, y) > 0.6) g.set(x, y, AIR, [DIRT]);
+    }
+  }
+  for (let i = 0; i < 4; i++) {
+    const x = g.r(60, W - 60);
+    if (Math.abs(x - cx) < 170) continue;
+    g.ellipse(x, rockLine[Math.floor(x)] + 14, g.r(18, 30), g.r(8, 12), AIR, [DIRT]);
+  }
+
+  // The pyramid: sandstone blocks (indestructible shell) around a destructible core
+  const baseY = Math.round(H * 0.74);
+  const half = 150;
+  const apex = baseY - 150;
+  for (let y = apex; y <= baseY + 6; y++) {
+    const hw = ((y - apex) / (baseY - apex)) * half;
+    for (let x = Math.floor(cx - hw); x <= cx + hw; x++) {
+      const shell = Math.abs(x - cx) > hw - 6 || y < apex + 8;
+      g.set(x, y, shell ? ROCK : DIRT);
+    }
+  }
+  // Steps on the faces (to climb it)
+  for (let y = apex + 14; y < baseY; y += 14) {
+    const hw = ((y - apex) / (baseY - apex)) * half;
+    g.rect(cx - hw - 4, y, cx - hw + 2, y + 3, ROCK);
+    g.rect(cx + hw - 2, y, cx + hw + 4, y + 3, ROCK);
+  }
+  // Entrances, corridors and the tomb
+  const tombY = baseY - 30;
+  for (const side of [-1, 1]) {
+    const ex = cx + side * 112;
+    g.rect(Math.min(ex, cx + side * 40), tombY - 12, Math.max(ex, cx + side * 40), tombY + 6, AIR, [DIRT, ROCK]);
+    g.line(cx + side * 70, tombY - 10, cx + side * 30, apex + 52, 14, AIR, [DIRT]);
+  }
+  g.rect(cx - 40, tombY - 22, cx + 40, tombY + 6, AIR);
+  g.rect(cx - 40, tombY + 6, cx + 40, tombY + 9, ROCK);
+  // Treasure… guarded by blasting powder
+  for (let i = 0; i < 4; i++) g.blob(cx + g.r(-30, 30), tombY + g.r(0, 4), g.r(3, 5), CRYSTAL, [AIR]);
+  g.rect(cx - 38, tombY - 2, cx - 28, tombY + 5, POWDER);
+  g.rect(cx + 28, tombY - 2, cx + 38, tombY + 5, POWDER);
+  // Upper chamber with sand that spills out when opened
+  g.ellipse(cx, apex + 50, 26, 12, AIR, [DIRT]);
+  g.ellipse(cx, apex + 54, 24, 8, SAND, [AIR]);
+
+  // Oasis on one side, with palm trees
+  const ox = g.rand() < 0.5 ? W * 0.14 : W * 0.86;
+  // Firm sandstone banks around the water (loose sand would slide into it)
+  g.ellipse(ox, rockLine[Math.floor(ox)] - 6, 100, 60, DIRT, [SAND]);
+  g.ellipse(ox, rockLine[Math.floor(ox)] - 4, 60, 30, AIR, [SAND, DIRT]);
+  g.rect(ox - 60, 0, ox + 60, rockLine[Math.floor(ox)] - 34, AIR, [DIRT]);
+  g.basin(ox, rockLine[Math.floor(ox)] - 10, 22, WATER, 6000);
+  for (const dx of [-70, 66]) {
+    const px = ox + dx;
+    const top = g.floorBelow(px, 20);
+    if (top < 0) continue;
+    const h = g.r(55, 80);
+    for (let k = 0; k < h; k++) g.rect(px - 2 + Math.sin(k * 0.05) * 6, top - k, px + 2 + Math.sin(k * 0.05) * 6, top - k, WOOD, [AIR, SAND]);
+    const tx = px + Math.sin(h * 0.05) * 6;
+    for (let a = 0; a < 5; a++) {
+      const ang = -Math.PI / 2 + (a - 2) * 0.55;
+      g.line(tx, top - h, tx + Math.cos(ang) * 24, top - h + Math.sin(ang) * 10 + 10, 3, DIRT, [AIR]);
+    }
+  }
+  // Quicksand-like acid bog on the other side
+  if (hazards) {
+    const bx = ox < cx ? W * 0.8 : W * 0.2;
+    g.ellipse(bx, sandTop[Math.floor(bx)] + 6, 20, 8, AIR, [SAND]);
+    g.basin(bx, sandTop[Math.floor(bx)] + 4, 4, ACID, 500);
+  }
+  // Buried crystals and a powder cache in the bedrock
+  g.crystals(8, [DIRT]);
+  for (let i = 0; i < 3; i++) {
+    const p = g.wallSpot([DIRT]);
+    if (p && Math.abs(p.x - cx) > 160) g.blob(p.x, p.y, g.r(4, 7), POWDER, [DIRT]);
+  }
+  // Floating sandstone ledges (rope anchors)
+  for (let i = 0; i < 5; i++) {
+    const x = g.r(50, W - 50);
+    const y = g.r(40, H * 0.35);
+    if (g.get(x, y) === AIR) g.rect(x - g.r(12, 22), y, x + g.r(12, 22), y + 5, ROCK, [AIR]);
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Mine Abandonnée — galleries on several levels, timbering, powder kegs, crystal veins
+// ═════════════════════════════════════════════════════════════════════════════
+
+function genMine(g: Grid, hazards: boolean) {
+  const { W, H } = g;
+  g.fill(DIRT);
+  const surface = 46;
+  g.rect(0, 0, W, surface, AIR);
+  const n = g.noise(40);
+  for (let x = 0; x < W; x++) g.rect(x, surface, x, surface + Math.round(n(x, 0) * 10), AIR);
+  g.rect(0, H - 18, W, H, ROCK);
+
+  // Rock strata
+  const strata = g.fbm(70, 2);
+  for (let y = surface + 20; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (Math.abs(strata(x, y) - 0.5) < 0.018) g.set(x, y, ROCK, [DIRT]);
+    }
+  }
+
+  // Galleries on 4 levels, each with a floor of rails (rock) and timber supports
+  const levels = [118, 210, 300, 392];
+  const shafts: number[] = [];
+  levels.forEach((ly, li) => {
+    const x0 = g.r(30, 120);
+    const x1 = W - g.r(30, 120);
+    const wob = g.noise(60);
+    for (let x = Math.floor(x0); x <= x1; x++) {
+      const y = ly + Math.round((wob(x, li * 50) - 0.5) * 10);
+      g.rect(x, y - 24, x, y, AIR);
+      g.set(x, y + 1, ROCK);
+    }
+    for (let x = x0 + 20; x < x1 - 10; x += g.r(38, 52)) {
+      const y = g.floorBelow(x, ly - 20);
+      if (y < 0) continue;
+      g.rect(x, y - 24, x + 2, y - 1, WOOD, [AIR]);
+      g.rect(x - 8, y - 26, x + 10, y - 23, WOOD, [AIR, DIRT]);
+    }
+    // Side chambers
+    for (let k = 0; k < 2; k++) g.blob(g.r(x0 + 40, x1 - 40), ly - g.r(30, 40), g.r(12, 18), AIR, [DIRT]);
+  });
+
+  // Shafts between the levels (some with wooden ladders/platforms)
+  for (let i = 0; i < 4; i++) {
+    const x = g.r(80, W - 80);
+    shafts.push(x);
+    g.rect(x - 9, surface, x + 9, levels[levels.length - 1], AIR, [DIRT, ROCK]);
+    for (let y = surface + 30; y < levels[levels.length - 1]; y += 46) g.rect(x - 9, y, x - 2, y + 2, WOOD, [AIR]);
+  }
+  // Head frame over the main shaft
+  const mx = shafts[0];
+  g.rect(mx - 16, surface - 30, mx - 13, surface + 4, WOOD, [AIR]);
+  g.rect(mx + 13, surface - 30, mx + 16, surface + 4, WOOD, [AIR]);
+  g.rect(mx - 18, surface - 33, mx + 18, surface - 30, WOOD, [AIR]);
+
+  // Blasting powder: veins and kegs in the galleries
+  for (let i = 0; i < 6; i++) {
+    const p = g.wallSpot([DIRT]);
+    if (p) g.blob(p.x, p.y, g.r(5, 9), POWDER, [DIRT]);
+  }
+  for (const ly of levels) {
+    for (let k = 0; k < 2; k++) {
+      const x = g.r(60, W - 60);
+      const y = g.floorBelow(x, ly - 20);
+      if (y > 0 && g.get(x, y - 2) === AIR) g.rect(x - 4, y - 9, x + 4, y - 1, POWDER, [AIR]);
+    }
+  }
+  // Rich crystal veins
+  g.crystals(22, [DIRT, ROCK]);
+  // Loose sand pockets in the ceilings (they cave in when undermined)
+  for (let i = 0; i < 7; i++) {
+    const x = g.r(40, W - 40);
+    const y = levels[g.ri(0, levels.length - 1)] - g.r(32, 46);
+    g.blob(x, y, g.r(8, 14), SAND, [DIRT]);
+  }
+  // Flooded bottom gallery
+  const deep = levels[levels.length - 1];
+  for (let x = 30; x < W - 30; x += 50) g.basin(x, deep - 4, 8, hazards && x > W / 2 ? LAVA : WATER, 3000);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Le Sablier — a giant hourglass: break the crystal neck and the sand pours down
+// ═════════════════════════════════════════════════════════════════════════════
+
+function genHourglass(g: Grid, hazards: boolean) {
+  const { W, H } = g;
+  g.fill(AIR);
+  const cx = W / 2;
+  const top = 58;
+  const neck = Math.round(H * 0.5);
+  const bottom = H - 62;
+  const bulb = 108;
+
+  // Bottom pool and floor
+  g.rect(0, H - 24, W, H, ROCK);
+  g.rect(0, H - 40, W, H - 24, hazards ? LAVA : WATER);
+
+  // The two glass bulbs (ice, 3 px), wide at the ends and pinched at the neck
+  const widthAt = (y: number) => {
+    const t = Math.abs(y - neck) / (neck - top);
+    return 5 + bulb * Math.sin(Math.min(1, t) * Math.PI * 0.5) ** 1.4;
+  };
+  for (let y = top; y <= bottom; y++) {
+    const hw = widthAt(y);
+    g.rect(cx - hw - 3, y, cx - hw, y, ICE);
+    g.rect(cx + hw, y, cx + hw + 3, y, ICE);
+  }
+  // Brass/stone frame: plates and pillars
+  g.rect(cx - bulb - 30, top - 14, cx + bulb + 30, top, ROCK);
+  g.rect(cx - bulb - 30, bottom, cx + bulb + 30, bottom + 14, ROCK);
+  for (const side of [-1, 1]) g.rect(cx + side * (bulb + 22) - 4, top, cx + side * (bulb + 22) + 4, bottom, ROCK);
+  // Sand in the upper bulb, held by a crystal plug in the neck
+  for (let y = top + 40; y < neck - 4; y++) {
+    const hw = widthAt(y);
+    g.rect(cx - hw + 1, y, cx + hw - 1, y, SAND, [AIR]);
+  }
+  g.rect(cx - 6, neck - 4, cx + 6, neck + 2, CRYSTAL);
+  // A bit of sand already in the lower bulb, and a powder charge to blow the glass
+  for (let y = bottom - 16; y < bottom; y++) {
+    const hw = widthAt(y) * Math.min(1, (y - (bottom - 16)) / 16);
+    g.rect(cx - hw, y, cx + hw, y, SAND, [AIR]);
+  }
+  g.rect(cx - 5, bottom - 22, cx + 5, bottom - 17, POWDER, [AIR]);
+  // Doors in the glass so wizards can get inside the bulbs
+  for (const side of [-1, 1]) {
+    const yy = bottom - 50;
+    g.rect(cx + side * widthAt(yy) - 5, yy - 14, cx + side * widthAt(yy) + 5, yy, AIR, [ICE]);
+  }
+
+  // Clock towers on both sides with wooden floors
+  for (const side of [-1, 1]) {
+    const tx = side < 0 ? 70 : W - 70;
+    g.rect(tx - 34, H * 0.3, tx - 28, H - 40, ROCK);
+    g.rect(tx + 28, H * 0.3, tx + 34, H - 40, ROCK);
+    for (let y = Math.round(H * 0.3) + 40; y < H - 50; y += 50) {
+      g.rect(tx - 28, y, tx + 28, y + 3, WOOD);
+      const gap = (y / 50) % 2 < 1 ? tx - 26 : tx + 8;
+      g.rect(gap, y, gap + 18, y + 3, AIR);
+    }
+    g.ellipse(tx, H * 0.3, 40, 16, DIRT, [AIR], true);
+    g.rect(tx - 34, H * 0.3 - 2, tx + 34, H * 0.3 + 3, ROCK);
+    g.rect(tx + side * 34 - 2, H * 0.5, tx + side * 34 + 2, H * 0.5 + 16, AIR); // window
+    g.mushroom(tx + side * -48, H - 40, 9);
+  }
+
+  // Floating islands of earth between the towers and the hourglass, with sand caps
+  for (let i = 0; i < 6; i++) {
+    const side = i % 2 === 0 ? -1 : 1;
+    const x = cx + side * g.r(bulb + 50, bulb + 90);
+    const y = g.r(H * 0.2, H * 0.78);
+    g.blob(x, y, g.r(10, 16), DIRT);
+    g.ellipse(x, y - 10, g.r(10, 14), 5, SAND, [AIR]);
+    if (g.rand() < 0.4) g.blob(x, y + 6, 3, CRYSTAL);
+  }
+  g.crystals(6, [DIRT]);
+  // Top ledge above the hourglass (rope anchor, sniper spot)
+  g.ellipse(cx, top - 40, 40, 6, DIRT);
 }

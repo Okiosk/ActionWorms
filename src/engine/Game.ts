@@ -2,8 +2,10 @@ import { CONFIG } from '../config';
 import { Terrain } from './Terrain';
 import { TerrainGL } from './TerrainGL';
 import { Worm, WormInput, EMPTY_INPUT, WormFx, WIZARD_FOOT, WIZARD_HEIGHT, FROZEN_ROBE } from './Worm';
-import { drawWizard, animFrames, prepareWizards } from './Sprites';
+import { drawWizard, animFrames, prepareWizards, drawFx } from './Sprites';
 import { GasCloud } from './GasCloud';
+import { has, rulesOf, Rules } from './Mutators';
+import { WORLD_ENV } from './Env';
 import { computeLightning, drawLightning } from './ForceLightning';
 import { Projectile, ProjectileWorld } from './Projectile';
 import { ParticleManager } from './Particles';
@@ -39,6 +41,20 @@ const HOST_TIMEOUT_MS = 8000;
 const CORPSE_MS = 4000;
 
 interface Corpse { x: number; y: number; vx: number; vy: number; facing: number; color: string; born: number }
+/** Portails Jumeaux: each caster owns up to 2 linked portals */
+interface Portal { owner: string; x: number; y: number; age: number }
+const PORTAL_LIFE = 1500;
+const PORTAL_RADIUS = 8;
+/** Anomalie gravitationnelle */
+interface GravityZone { x: number; y: number; age: number }
+const ZONE_LIFE = 360;
+const ZONE_RADIUS = 58;
+/** Explosion waiting to happen (powder chain reactions, martyrs) — host only */
+interface PendingBlast { x: number; y: number; r: number; damage: number; owner: string; delay: number; color: string }
+/** Rising lava: starts after 30 s, rises 4 px every 3 s, stops at 40 % of the map */
+const LAVA_START = 1800;
+const LAVA_STEP_TICKS = 180;
+const LAVA_STEP_PX = 4;
 /** Destroyed crystal pixels per gold coin (a cluster ≈ 100 px ≈ 20 gold) */
 const CRYSTAL_PIXELS_PER_GOLD = 5;
 const randomSeed = () => Math.floor(Math.random() * 1_000_000) + 1;
@@ -89,6 +105,20 @@ export class Game implements ProjectileWorld {
   /** Curse state seen at the previous tick, to play the transformation effects once */
   private curseSeen = new Map<string, { sheep: boolean; bubble: boolean; drunk: boolean }>();
   private lastCrackle = 0;
+  private portals: Portal[] = [];
+  private zones: GravityZone[] = [];
+  private pendingBlasts: PendingBlast[] = [];
+  /** Storm mutator: horizontal acceleration (host decides, synced in STATE) */
+  public wind = 0;
+  private matchTicks = 0;
+  private lavaLevel = CONFIG.MAP_HEIGHT;
+  /** Combined effect of the active mutators */
+  public get rules(): Rules {
+    return rulesOf(this.modifiers.mutators);
+  }
+  public mut(id: Parameters<typeof has>[1]): boolean {
+    return has(this.modifiers.mutators, id);
+  }
   /** Smooth WebGL terrain layers, stacked under and over the 2D canvas (null → pixel 2D renderer) */
   private glSolid: TerrainGL | null = null;
   private glLiquid: TerrainGL | null = null;
@@ -117,6 +147,21 @@ export class Game implements ProjectileWorld {
     window.addEventListener('resize', () => this.resizeCanvas());
     this.setupNetworkCallbacks();
     this.setSmoothTerrain(Game.loadSmoothPreference());
+    // Gravity anomalies reverse gravity inside them (for wizards, spells and particles)
+    WORLD_ENV.gravityAt = (x, y) => {
+      for (const z of this.zones) if ((x - z.x) ** 2 + (y - z.y) ** 2 < ZONE_RADIUS * ZONE_RADIUS) return -0.7;
+      return 1;
+    };
+    // Collapsing sand raises a cloud of dust
+    this.terrain.onSandFall = (x0, y0, x1, y1) => {
+      const n = Math.min(40, Math.round((x1 - x0 + 1) * (y1 - y0 + 1) / 60));
+      for (let i = 0; i < n; i++) {
+        const x = x0 + Math.random() * (x1 - x0);
+        const y = y0 + Math.random() * (y1 - y0);
+        if (Math.random() < 0.5) this.particles.spawn(x, y, (Math.random() - 0.5) * 0.4, 0.6 + Math.random(), 'dirt', '#d9b97a', 1.2, 30);
+        else this.particles.spawn(x, y, (Math.random() - 0.5) * 0.3, -0.1, 'smoke', '#c8a978', 6, 40);
+      }
+    };
   }
 
   // ════════════════════════════════════════════════════════════════════════
@@ -290,7 +335,14 @@ export class Game implements ProjectileWorld {
 
   private setupMatch() {
     const m = this.modifiers;
-    this.terrain.generateMap(m.mapSeed, m.mapType, m.acidEnabled, m.gameMode === 'koth' ? CONFIG.KOTH_ZONE_RADIUS : 0);
+    this.terrain.generateMap(m.mapSeed, m.mapType, rulesOf(m.mutators).hazards, m.gameMode === 'koth' ? CONFIG.KOTH_ZONE_RADIUS : 0);
+    this.portals = [];
+    this.zones = [];
+    this.pendingBlasts = [];
+    this.wind = 0;
+    WORLD_ENV.wind = 0;
+    this.matchTicks = 0;
+    this.lavaLevel = this.terrain.height - 11;
     this.particles.clear();
     this.corpses = [];
     this.gasClouds = [];
@@ -335,8 +387,8 @@ export class Game implements ProjectileWorld {
     const w = this.worms.find(worm => worm.id === wormId);
     if (!w || w.isAlive() || this.phase !== 'playing') return;
     const def = WEAPON_REGISTRY[weaponId];
-    if (def && w.money >= def.price) {
-      w.money -= def.price;
+    if (def && (this.rules.freeSpells || w.money >= def.price)) {
+      if (!this.rules.freeSpells) w.money -= def.price;
       w.setWeapon(weaponId);
     } else {
       w.setWeapon(DEFAULT_WEAPON);
@@ -514,6 +566,7 @@ export class Game implements ProjectileWorld {
       }
     }
     this.updateCorpses();
+    this.updateFields();
     this.updateGas();
     this.curseEffects();
     this.particles.update(this.terrain);
@@ -539,6 +592,7 @@ export class Game implements ProjectileWorld {
       this.inputHistory.push({ seq, input });
       if (this.inputHistory.length > 120) this.inputHistory.shift();
       local.update(input, this.terrain, this.clientFx);
+      this.portalStep(local); // predicted; the host does the same
     }
     for (const p of this.projectiles) p.spawnTrail(this.particles);
   }
@@ -551,6 +605,7 @@ export class Game implements ProjectileWorld {
 
   private updateHost() {
     const mods = this.modifiers;
+    this.updateWorldHost();
 
     // 1. Wizards
     for (const worm of this.worms) {
@@ -577,6 +632,7 @@ export class Game implements ProjectileWorld {
         onShoot: (w, weapon, angle) => this.hostShoot(w, weapon, angle),
         playSounds: worm.id === this.localId
       });
+      this.portalStep(worm);
 
       // Status effects
       if (worm.shieldTimer > 0) worm.shieldTimer--;
@@ -616,8 +672,17 @@ export class Game implements ProjectileWorld {
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
       p.update(this);
-      if (!p.alive) this.projectiles.splice(i, 1);
+      if (p.alive && !p.weapon.portal && !p.attachedTo && p.portalCooldown <= 0 && this.portals.length >= 2) {
+        const exit = this.portalExit(p.x, p.y);
+        if (exit) {
+          this.portalFX(p.x, p.y, exit);
+          p.x = p.prevX = exit.x;
+          p.y = p.prevY = exit.y;
+          p.portalCooldown = 20;
+        }
+      }
     }
+    this.projectiles = this.projectiles.filter(p => p.alive);
 
     // 4. King of the hill
     if (mods.gameMode === 'koth' && this.phase === 'playing') this.updateKOTH();
@@ -642,12 +707,14 @@ export class Game implements ProjectileWorld {
     if (weapon.channel) {
       this.lightningTick(worm, weapon);
       this.castFX(worm, weapon, angle);
+      this.chaosSwap(worm);
       return; // the arcs are drawn from the synced "channelling" flag, no event needed
     }
     if (weapon.shieldDuration) {
       worm.shieldTimer = weapon.shieldDuration;
       this.castFX(worm, weapon, angle);
       this.emit({ t: 'shot', id: worm.id, w: weapon.id });
+      this.chaosSwap(worm);
       return;
     }
     const ox = worm.x + Math.cos(angle) * 9;
@@ -660,6 +727,27 @@ export class Game implements ProjectileWorld {
     }
     this.castFX(worm, weapon, angle);
     this.emit({ t: 'shot', id: worm.id, w: weapon.id });
+    this.chaosSwap(worm);
+  }
+
+  /** Sorts aléatoires: a new random spell after each cast (the cooldown stays) */
+  private chaosSwap(worm: Worm) {
+    if (!this.mut('chaos')) return;
+    const ids = Object.keys(WEAPON_REGISTRY) as WeaponId[];
+    worm.weapon = WEAPON_REGISTRY[ids[Math.floor(Math.random() * ids.length)]];
+  }
+
+  // ── ProjectileWorld: small helpers ────────────────────────────────────────
+
+  public hurt(w: Worm, dmg: number, ownerId: string) {
+    this.damageWorm(w, dmg, 0, 0, ownerId, true);
+  }
+
+  public pass(_p: Projectile, to: Worm) {
+    sound.playBouncy();
+    for (let i = 0; i < 6; i++) {
+      this.particles.spawn(to.x, to.y - 14, (Math.random() - 0.5) * 1.5, -Math.random() * 1.5, 'spark', '#ffd27a', 1, 14);
+    }
   }
 
   /** Casting sound + staff sparkle */
@@ -685,7 +773,6 @@ export class Game implements ProjectileWorld {
   // ── ProjectileWorld implementation (host) ────────────────────────────────
 
   public explode(p: Projectile, directHit: Worm | null) {
-    const mods = this.modifiers;
     const weapon = p.weapon;
     const x = p.x;
     const y = p.y;
@@ -701,14 +788,39 @@ export class Game implements ProjectileWorld {
       return;
     }
 
-    const r = weapon.craterRadius * mods.explosionScale;
-    // Carve with exactly the (rounded) values sent to the clients so the terrains stay identical
-    const cr = Math.round(r * 10) / 10;
-    const carved = cr > 0 ? this.terrain.carveCircle(q(x), q(y), cr, !!weapon.fire) : { modified: false, crystals: 0 };
-    if (carved.modified) {
-      this.emit({ t: 'crater', x: q(x), y: q(y), r: cr, ...(weapon.fire ? { f: 1 as const } : {}) });
-      this.crystalReward(x, y, carved.crystals, p.ownerId);
+    // Portails Jumeaux: a portal opens just before the impact point
+    if (weapon.portal) {
+      const sp = Math.hypot(p.vx, p.vy) || 1;
+      let px = x - (p.vx / sp) * 6;
+      let py = y - (p.vy / sp) * 6;
+      for (let k = 0; k < 8 && this.terrain.isSolid(px, py); k++) py -= 2;
+      px = q(px);
+      py = q(py);
+      this.addPortal(p.ownerId, px, py);
+      this.emit({ t: 'portal', o: p.ownerId, x: px, y: py });
+      return;
     }
+    // Anomalie gravitationnelle
+    if (weapon.antigravity) {
+      this.addZone(q(x), q(y));
+      this.emit({ t: 'zone', x: q(x), y: q(y) });
+      return;
+    }
+    // Tornade: dissipates and flings everyone it was carrying
+    if (weapon.tornado) {
+      for (const w of this.worms) {
+        if (w.isAlive() && Math.abs(w.x - x) < 18 && w.y - y < 8 && w.y - y > -50) {
+          w.vx += (p.vx >= 0 ? 1 : -1) * 2.5;
+          w.vy = Math.min(w.vy, -3.5);
+        }
+      }
+      this.explosionFX(x, y - 10, 6, '#dfe9f2');
+      this.emit({ t: 'boom', x: q(x), y: q(y - 10), r: 6, c: '#dfe9f2' });
+      return;
+    }
+
+    const r = weapon.craterRadius * this.rules.explosionScale;
+    this.carveCrater(x, y, r, !!weapon.fire, p.ownerId);
 
     // Translocation: the caster appears where the orb stopped
     if (weapon.teleport) {
@@ -767,14 +879,68 @@ export class Game implements ProjectileWorld {
       sound.playGas();
     }
 
-    this.explosionFX(x, y, r, weapon.elementColor, !!weapon.fire);
-    this.emit({ t: 'boom', x: q(x), y: q(y), r: q(r), c: weapon.elementColor, ...(weapon.fire ? { f: 1 as const } : {}) });
+    this.blast(x, y, r, weapon.damage, p.ownerId, weapon.elementColor, !!weapon.fire, directHit, p);
+    this.afterBlast(p, x, y, r);
+  }
 
-    // Damage: full damage on a direct hit, splash with falloff around
-    const blast = Math.max(r * 1.5, 6);
-    const knockScale = Math.min(5, 0.5 + weapon.damage / 12);
+  /**
+   * Carves a crater with exactly the (rounded) values sent to the clients so the terrains
+   * stay identical. Breaking crystals pays gold, breaking blasting powder sets it off.
+   */
+  private carveCrater(x: number, y: number, r: number, fire: boolean, ownerId: string) {
+    const q = Math.round;
+    const cr = Math.round(r * 10) / 10;
+    if (cr <= 0) return;
+    const carved = this.terrain.carveCircle(q(x), q(y), cr, fire);
+    if (!carved.modified) return;
+    this.emit({ t: 'crater', x: q(x), y: q(y), r: cr, ...(fire ? { f: 1 as const } : {}) });
+    this.crystalReward(x, y, carved.crystals, ownerId);
+    this.ignitePowder(carved.powder, ownerId);
+  }
+
+  /** Blasting powder that was hit goes off a moment later (and sets off the powder next to it) */
+  private ignitePowder(pts: number[], ownerId: string) {
+    const n = pts.length / 2;
+    if (n < 4 || this.pendingBlasts.length > 40) return;
+    const picks = n < 40 ? [0] : n < 120 ? [0, n - 1] : [0, Math.floor(n / 2), n - 1];
+    picks.forEach((i, k) => {
+      this.pendingBlasts.push({
+        x: pts[i * 2], y: pts[i * 2 + 1], r: Math.min(22, 11 + Math.sqrt(n) * 0.9), damage: 38,
+        owner: ownerId, delay: 7 + k * 4 + Math.floor(Math.random() * 5), color: '#ff7a1a'
+      });
+    });
+  }
+
+  /** Delayed explosions (powder chains, martyrs) — host */
+  private updatePendingBlasts() {
+    for (const b of this.pendingBlasts) b.delay--;
+    const ready = this.pendingBlasts.filter(b => b.delay <= 0);
+    if (ready.length === 0) return;
+    this.pendingBlasts = this.pendingBlasts.filter(b => b.delay > 0);
+    for (const b of ready) {
+      this.carveCrater(b.x, b.y, b.r, true, b.owner);
+      this.blast(b.x, b.y, b.r, b.damage, b.owner, b.color, true, null, null);
+    }
+  }
+
+  /**
+   * Explosion FX + damage with falloff (full damage on a direct hit) + knock-back.
+   * Decoys caught in it go off too.
+   */
+  private blast(x: number, y: number, r: number, damage: number, ownerId: string, color: string, fire: boolean,
+    directHit: Worm | null, p: Projectile | null) {
+    const q = Math.round;
+    this.explosionFX(x, y, r, color, fire);
+    this.emit({ t: 'boom', x: q(x), y: q(y), r: q(r), c: color, ...(fire ? { f: 1 as const } : {}) });
+
+    for (const d of this.projectiles) {
+      if (d.alive && d.weapon.decoy && d !== p && Math.hypot(d.x - x, d.y - y) < r + 6) d.detonate(this, null);
+    }
+
+    const reach = Math.max(r * 1.5, 6);
+    const knockScale = Math.min(5, 0.5 + damage / 12);
     for (const w of this.worms) {
-      if (!w.isAlive() || w.id === p.reflectedBy) continue;
+      if (!w.isAlive() || (p && w.id === p.reflectedBy)) continue;
       const dx = w.x - x;
       const dy = w.y - y;
       const dist = Math.hypot(dx, dy);
@@ -782,22 +948,28 @@ export class Game implements ProjectileWorld {
       if (w === directHit) {
         falloff = 1;
       } else {
-        falloff = 1 - Math.max(0, dist - w.radius) / blast;
+        falloff = 1 - Math.max(0, dist - w.radius) / reach;
         if (falloff <= 0) continue;
       }
-      let kx: number;
-      let ky: number;
+      let kx = 0;
+      let ky = -1;
       if (dist > 0.5) {
         kx = dx / dist;
         ky = dy / dist;
-      } else {
+      } else if (p) {
         const sp = Math.hypot(p.vx, p.vy) || 1;
         kx = p.vx / sp;
         ky = p.vy / sp;
       }
-      const dealt = this.damageWorm(w, Math.round(weapon.damage * falloff), kx * knockScale * falloff, ky * knockScale * falloff, p.ownerId);
-      this.applyHitEffects(p, w, dealt);
+      const dealt = this.damageWorm(w, Math.round(damage * falloff), kx * knockScale * falloff, ky * knockScale * falloff, ownerId);
+      if (p) this.applyHitEffects(p, w, dealt);
     }
+  }
+
+  /** Extra effects of some spells once they went off */
+  private afterBlast(p: Projectile, x: number, y: number, r: number) {
+    const weapon = p.weapon;
+    const q = Math.round;
 
     if (weapon.freezeDuration) {
       const ir = Math.round(r * 3);
@@ -849,18 +1021,105 @@ export class Game implements ProjectileWorld {
   }
 
   private spawnProjectile(ownerId: string, weapon: WeaponDef, x: number, y: number, vx: number, vy: number, isSubCluster = false) {
+    // Ricochets: ordinary spells bounce a few times before exploding
+    if (this.mut('ricochet') && !weapon.piercing && !weapon.sticky && !weapon.hopper && !weapon.tornado && !weapon.decoy && !weapon.hotPotato) {
+      weapon = { ...weapon, bounces: weapon.bounces + 3 };
+    }
     this.projectiles.push(new Projectile({ id: this.nextProjectileId++, ownerId, weapon, x, y, vx, vy, isSubCluster }));
   }
 
   public pierce(p: Projectile, x0: number, y0: number, x1: number, y1: number) {
-    const r = Math.round(p.weapon.craterRadius * this.modifiers.explosionScale * 10) / 10;
+    const r = Math.round(p.weapon.craterRadius * this.rules.explosionScale * 10) / 10;
     const fire = !!p.weapon.fire;
     const q = Math.round;
     const carved = this.terrain.carveLine(q(x0), q(y0), q(x1), q(y1), r, fire);
     if (carved.modified) {
       this.emit({ t: 'line', x0: q(x0), y0: q(y0), x1: q(x1), y1: q(y1), r, ...(fire ? { f: 1 as const } : {}) });
       this.crystalReward(x1, y1, carved.crystals, p.ownerId);
+      this.ignitePowder(carved.powder, p.ownerId);
     }
+  }
+
+  // ── Portals, gravity anomalies, storm and rising lava ─────────────────────
+
+  private addPortal(owner: string, x: number, y: number) {
+    const mine = this.portals.filter(o => o.owner === owner);
+    if (mine.length >= 2) this.portals.splice(this.portals.indexOf(mine[0]), 1);
+    this.portals.push({ owner, x, y, age: 0 });
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      this.particles.spawn(x + Math.cos(a) * 9, y + Math.sin(a) * 9, Math.cos(a) * 0.6, Math.sin(a) * 0.6, 'spark', '#4fd8ff', 1, 20);
+    }
+    sound.playVortex();
+  }
+
+  /** The other end of a linked pair, if (x, y) is inside a portal */
+  private portalExit(x: number, y: number): Portal | null {
+    for (const a of this.portals) {
+      if ((x - a.x) ** 2 + (y - a.y) ** 2 > PORTAL_RADIUS * PORTAL_RADIUS) continue;
+      const b = this.portals.find(o => o !== a && o.owner === a.owner);
+      if (b) return b;
+    }
+    return null;
+  }
+
+  /** Wizards and spells going through a portal come out of its twin, same speed */
+  private portalStep(w: Worm) {
+    if (!w.isAlive() || w.portalCooldown > 0 || this.portals.length < 2) return;
+    const exit = this.portalExit(w.x, w.y);
+    if (!exit) return;
+    this.portalFX(w.x, w.y, exit);
+    w.x = w.prevX = exit.x;
+    w.y = w.prevY = exit.y;
+    w.portalCooldown = 30;
+    w.rope.release();
+  }
+
+  private portalFX(x: number, y: number, exit: Portal) {
+    for (const [px, py] of [[x, y], [exit.x, exit.y]]) {
+      for (let i = 0; i < 8; i++) {
+        const a = Math.random() * Math.PI * 2;
+        this.particles.spawn(px, py, Math.cos(a) * 1.2, Math.sin(a) * 1.2, 'spark', i % 2 ? '#4fd8ff' : '#ff9a3c', 1, 16);
+      }
+    }
+    sound.playDart();
+  }
+
+  private addZone(x: number, y: number) {
+    this.zones.push({ x, y, age: 0 });
+    sound.playVortex();
+  }
+
+  /** Common to host and clients: ageing of portals / zones, zone sparkles */
+  private updateFields() {
+    for (const o of this.portals) o.age++;
+    this.portals = this.portals.filter(o => o.age < PORTAL_LIFE);
+    for (const z of this.zones) {
+      z.age++;
+      if (this.frame % 2 === 0) {
+        const a = Math.random() * Math.PI * 2;
+        const d = Math.random() * ZONE_RADIUS;
+        this.particles.spawn(z.x + Math.cos(a) * d, z.y + Math.sin(a) * d, 0, -0.4, 'spark', '#c9a8ff', 0.8, 30);
+      }
+    }
+    this.zones = this.zones.filter(z => z.age < ZONE_LIFE);
+  }
+
+  /** Host: storm direction changes, lava rises, delayed explosions go off */
+  private updateWorldHost() {
+    this.matchTicks++;
+    if (this.mut('wind') && this.matchTicks % 900 === 1) {
+      this.wind = Math.random() < 0.15 ? 0 : (Math.random() < 0.5 ? -1 : 1) * (0.008 + Math.random() * 0.017);
+    }
+    WORLD_ENV.wind = this.mut('wind') ? this.wind : 0;
+    if (this.mut('risingLava') && this.matchTicks >= LAVA_START && this.matchTicks % LAVA_STEP_TICKS === 0
+      && this.lavaLevel > this.terrain.height * 0.4) {
+      const water = !this.rules.hazards;
+      this.lavaLevel -= LAVA_STEP_PX;
+      this.terrain.flood(this.lavaLevel, water);
+      this.emit({ t: 'lava', y: this.lavaLevel, ...(water ? { w: 1 as const } : {}) });
+    }
+    this.updatePendingBlasts();
   }
 
   /** Breaking mana crystals: sparkles for everyone, gold for the caster (host). */
@@ -898,12 +1157,17 @@ export class Game implements ProjectileWorld {
     const mods = this.modifiers;
     const self = attackerId === w.id;
     let dmg = damage;
-    if (self && mods.noSelfDamage) dmg = 0;
+    if (self && this.rules.noSelfDamage) dmg = 0;
     const environment = attackerId === 'acid' || attackerId === 'lava';
     if (!self && !environment && mods.gameMode === 'teams' && this.teamOf(attackerId) === this.teamOf(w.id)) dmg = 0;
     dmg = Math.round(dmg * mods.damageScale);
 
     w.takeDamage(dmg, kx, ky);
+    // Vampirism: the attacker drinks half of the damage
+    if (dmg > 0 && !self && this.mut('vampire')) {
+      const a = this.worms.find(o => o.id === attackerId && o.isAlive());
+      if (a) a.health = Math.min(a.maxHealth, a.health + Math.ceil(dmg / 2));
+    }
     if (dmg > 0 && !quiet) {
       const n = Math.max(5, Math.min(32, Math.round(dmg * 0.7)));
       const k = Math.hypot(kx, ky);
@@ -926,6 +1190,9 @@ export class Game implements ProjectileWorld {
     victim.rope.release();
     this.addCorpse(victim);
     sound.playDie();
+    if (this.mut('martyr')) {
+      this.pendingBlasts.push({ x: victim.x, y: victim.y, r: 26, damage: 50, owner: victim.id, delay: 24, color: '#ff4a2a' });
+    }
 
     const killer = this.worms.find(k => k.id === attackerId);
     let cause: KillCause | undefined;
@@ -1149,10 +1416,14 @@ export class Game implements ProjectileWorld {
       const s: ProjectileNetState = { id: p.id, w: p.weapon.id, x: r1(p.x), y: r1(p.y), vx: r1(p.vx), vy: r1(p.vy) };
       if (p.isSubCluster) s.sub = 1;
       if (p.armed) s.armed = 1;
+      if (p.weapon.decoy) s.o = p.ownerId;
+      if (p.attachedTo) s.at = p.attachedTo;
+      if (p.weapon.hotPotato) s.fu = p.fuse;
       return s;
     });
 
-    this.net.broadcast({ type: 'STATE', worms, projectiles, events: this.pendingEvents, teamScores: this.teamScores });
+    this.net.broadcast({ type: 'STATE', worms, projectiles, events: this.pendingEvents, teamScores: this.teamScores,
+      ...(this.wind !== 0 ? { wind: Math.round(this.wind * 1e4) / 1e4 } : {}) });
     this.pendingEvents = [];
   }
 
@@ -1209,6 +1480,16 @@ export class Game implements ProjectileWorld {
         this.gasClouds.push(new GasCloud(ev.x, ev.y, this.terrain, ev.o));
         sound.playGas();
         break;
+      case 'portal':
+        this.addPortal(ev.o, ev.x, ev.y);
+        break;
+      case 'zone':
+        this.addZone(ev.x, ev.y);
+        break;
+      case 'lava':
+        this.lavaLevel = ev.y;
+        this.terrain.flood(ev.y, !!ev.w);
+        break;
       case 'kill':
         this.onKill?.(ev.killer, ev.victim, ev.cause);
         break;
@@ -1217,6 +1498,8 @@ export class Game implements ProjectileWorld {
 
   private applyWorldState(msg: StateMessage) {
     this.teamScores = msg.teamScores;
+    this.wind = msg.wind ?? 0;
+    WORLD_ENV.wind = this.wind;
     const seen = new Set<string>();
 
     for (const ws of msg.worms) {
@@ -1263,6 +1546,7 @@ export class Game implements ProjectileWorld {
       const respawned = !wasAlive;
       if (respawned || worm.weapon.id !== ws.weapon) {
         if (!isLocal || respawned) worm.setWeapon(ws.weapon);
+        else if (this.mut('chaos')) worm.weapon = WEAPON_REGISTRY[ws.weapon] ?? worm.weapon; // random spells
       }
       if (respawned) worm.waitingForShop = false;
 
@@ -1309,6 +1593,9 @@ export class Game implements ProjectileWorld {
       p.vx = ps.vx;
       p.vy = ps.vy;
       p.armed = !!ps.armed;
+      p.attachedTo = ps.at ?? '';
+      if (ps.o) p.ownerId = ps.o;
+      if (ps.fu !== undefined) p.fuse = ps.fu;
       p.resting = ps.vx === 0 && ps.vy === 0;
       return p;
     });
@@ -1451,7 +1738,16 @@ export class Game implements ProjectileWorld {
     ctx.imageSmoothingEnabled = true; // painted sprites
     if (this.modifiers.gameMode === 'koth') this.drawKothZone(ctx);
     this.drawCorpses(ctx, now);
-    for (const w of this.worms) w.draw(ctx, alpha, w.id === this.localId, this.terrain, now);
+    this.drawZones(ctx, now);
+    this.drawPortals(ctx, now);
+    this.drawDecoys(ctx, alpha, now);
+    const ghosts = this.mut('ghosts');
+    const local = this.getLocalWorm();
+    for (const w of this.worms) {
+      const isLocal = w.id === this.localId;
+      const hidden = ghosts && !isLocal && (this.modifiers.gameMode !== 'teams' || !local || this.teamOf(w.id) !== this.teamOf(local.id));
+      w.draw(ctx, alpha, isLocal, this.terrain, now, hidden);
+    }
     for (const c of this.gasClouds) c.draw(ctx, now);
     this.drawChannels(ctx, now);
     this.particles.draw(ctx);
@@ -1460,6 +1756,72 @@ export class Game implements ProjectileWorld {
     ctx.restore();
 
     this.drawOffScreenIndicators();
+  }
+
+  /** Portals: a swirling ring per portal, cyan for the 1st and orange for the 2nd of each caster */
+  private drawPortals(ctx: CanvasRenderingContext2D, now: number) {
+    if (this.portals.length === 0) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const o of this.portals) {
+      const mine = this.portals.filter(x => x.owner === o.owner);
+      const first = mine[0] === o;
+      const linked = mine.length === 2;
+      const color = first ? '#4fd8ff' : '#ff9a3c';
+      const fade = Math.min(1, (PORTAL_LIFE - o.age) / 90) * Math.min(1, o.age / 10);
+      const pulse = 1 + Math.sin(now * 0.006 + o.x) * 0.06;
+      drawFx(ctx, 'circle_05', o.x, o.y, 30 * pulse, color, 0.45 * fade);
+      drawFx(ctx, 'twirl_01', o.x, o.y, 24 * pulse, color, (linked ? 1 : 0.5) * fade, now * (first ? 0.004 : -0.004));
+      drawFx(ctx, 'circle_02', o.x, o.y, 20, '#ffffff', 0.7 * fade);
+    }
+    ctx.restore();
+  }
+
+  /** Gravity anomalies: a slowly turning violet circle */
+  private drawZones(ctx: CanvasRenderingContext2D, now: number) {
+    if (this.zones.length === 0) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const z of this.zones) {
+      const fade = Math.min(1, (ZONE_LIFE - z.age) / 60) * Math.min(1, z.age / 15);
+      drawFx(ctx, 'circle_05', z.x, z.y, ZONE_RADIUS * 2.4, '#5b2fa0', 0.35 * fade);
+      drawFx(ctx, 'magic_02', z.x, z.y, ZONE_RADIUS * 2.1, '#b07cff', 0.5 * fade, now * 0.0006);
+      drawFx(ctx, 'circle_02', z.x, z.y, ZONE_RADIUS * 2.05, '#d9c2ff', 0.45 * fade);
+    }
+    ctx.restore();
+  }
+
+  /** Decoys look exactly like their caster: same robe, same name, same health bar */
+  private drawDecoys(ctx: CanvasRenderingContext2D, alpha: number, now: number) {
+    for (const p of this.projectiles) {
+      if (!p.alive || !p.weapon.decoy) continue;
+      const owner = this.worms.find(w => w.id === p.ownerId) ?? this.players.find(o => o.id === p.ownerId);
+      const color = owner?.color ?? '#ffffff';
+      const name = owner?.name ?? '?';
+      const hp = owner instanceof Worm && owner.isAlive() ? owner.health / owner.maxHealth : 1;
+      const x = p.prevX + (p.x - p.prevX) * alpha;
+      const y = p.prevY + (p.y - p.prevY) * alpha;
+      const f = p.vx >= 0 ? 1 : -1;
+      const foot = y + WIZARD_FOOT;
+      drawWizard(ctx, color, 'run', Math.floor(now / 70 + p.id) % 13, x, foot, f, WIZARD_HEIGHT);
+      // Fake spell orb, health bar and name
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      drawFx(ctx, 'circle_05', x + f * 10, y - 5, 10, '#ffd76a', 0.9);
+      ctx.restore();
+      const barY = foot - WIZARD_HEIGHT - 5;
+      ctx.fillStyle = 'rgba(15, 10, 8, 0.75)';
+      ctx.fillRect(x - 10.75, barY - 0.75, 21.5, 3.5);
+      ctx.fillStyle = hp > 0.5 ? '#2bd461' : hp > 0.25 ? '#ffaa22' : '#ee2b2b';
+      ctx.fillRect(x - 10, barY, 20 * hp, 2);
+      ctx.font = '600 5.5px Inter, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+      ctx.strokeText(name, x, barY - 2);
+      ctx.fillStyle = '#ffecb3';
+      ctx.fillText(name, x, barY - 2);
+    }
   }
 
   /** Mains Foudroyantes: arcs from every wizard who keeps the button held */

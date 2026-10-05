@@ -36,6 +36,8 @@ export const CONFIG = {
   MAT_WOOD: 7,     // resists explosions, but fire burns it entirely
   MAT_LAVA: 8,     // liquid: sets wizards on fire
   MAT_BOUNCE: 9,   // giant mushroom: bounces wizards and spells
+  MAT_SAND: 10,    // destructible, collapses when nothing holds it up
+  MAT_POWDER: 11,  // blasting powder: blows up when an explosion or a fire reaches it
   BOUNCE_FORCE: 5.0,
   BOUNCE_JUMP_FORCE: 6.2,
 

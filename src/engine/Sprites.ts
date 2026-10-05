@@ -191,11 +191,17 @@ export function fxSprite(name: FxName, color: string, cpu = false): HTMLCanvasEl
  * Draws a sprite centred on (x, y), `size` world pixels wide (× `stretch` along its own x axis),
  * rotated by `rot`. The caller sets the blend mode (`lighter` for glows).
  */
+let fxAlpha = 1;
+/** Global opacity multiplier for drawFx (ghost wizards) */
+export function setFxAlpha(a: number) {
+  fxAlpha = a;
+}
+
 export function drawFx(ctx: CanvasRenderingContext2D, name: FxName, x: number, y: number, size: number,
   color: string, alpha = 1, rot = 0, stretch = 1) {
   const s = fxSprite(name, color);
   if (!s || alpha <= 0.01 || size <= 0) return;
-  ctx.globalAlpha = alpha > 1 ? 1 : alpha;
+  ctx.globalAlpha = (alpha > 1 ? 1 : alpha) * fxAlpha;
   const w = size * stretch;
   if (rot === 0) {
     ctx.drawImage(s, x - w / 2, y - size / 2, w, size);

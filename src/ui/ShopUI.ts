@@ -16,6 +16,8 @@ export class ShopUI {
   private lastChoice: WeaponId = DEFAULT_WEAPON;
   private onChoose: ((id: WeaponId) => void) | null = null;
   private visible = false;
+  /** Grimoire ouvert mutator: everything is free */
+  private free = false;
 
   constructor(container: HTMLElement) {
     this.el = document.createElement('div');
@@ -31,8 +33,9 @@ export class ShopUI {
     });
   }
 
-  public show(worm: Worm, onChoose: (id: WeaponId) => void) {
+  public show(worm: Worm, onChoose: (id: WeaponId) => void, free = false) {
     this.worm = worm;
+    this.free = free;
     this.onChoose = onChoose;
     this.selected = this.canAfford(this.lastChoice) ? this.lastChoice : DEFAULT_WEAPON;
     this.visible = true;
@@ -51,7 +54,7 @@ export class ShopUI {
   }
 
   private canAfford(id: WeaponId): boolean {
-    return !!this.worm && this.worm.money >= WEAPON_REGISTRY[id].price;
+    return !!this.worm && (this.free || this.worm.money >= WEAPON_REGISTRY[id].price);
   }
 
   private render() {
@@ -68,12 +71,12 @@ export class ShopUI {
         <div class="spell-grid">
           ${SPELLS.map(id => {
             const d = WEAPON_REGISTRY[id];
-            const cls = [id === this.selected ? 'selected' : '', money < d.price ? 'locked' : ''].join(' ');
+            const cls = [id === this.selected ? 'selected' : '', !this.canAfford(id) ? 'locked' : ''].join(' ');
             return `
               <button class="spell ${cls}" data-id="${id}" style="--spell-color:${d.elementColor}">
                 <span class="sicon" style="${spellIconStyle(id)}" aria-hidden="true"></span>
                 <span class="sname">${d.name}</span>
-                <span class="price ${d.price === 0 ? 'free' : ''}">${d.price === 0 ? 'Gratuit' : `${d.price} or`}</span>
+                <span class="price ${d.price === 0 || this.free ? 'free' : ''}">${d.price === 0 || this.free ? 'Gratuit' : `${d.price} or`}</span>
               </button>`;
           }).join('')}
         </div>

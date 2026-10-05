@@ -1,6 +1,7 @@
 import { CONFIG } from '../config';
 import { Terrain } from './Terrain';
 import { drawFx, FxName } from './Sprites';
+import { WORLD_ENV } from './Env';
 
 /**
  *  blood  droplet, drawn as a streak along its velocity, splats on any solid
@@ -214,8 +215,11 @@ export class ParticleManager {
   }
 
   /** Moves one particle; returns false when it is gone. */
-  private step(p: Particle, terrain: Terrain, G: number): boolean {
+  private step(p: Particle, terrain: Terrain, g: number): boolean {
     p.rot += p.vr;
+    // Gravity anomalies flip everything inside; the storm blows the light stuff away
+    const G = g * WORLD_ENV.gravityAt(p.x, p.y);
+    if (WORLD_ENV.wind !== 0) p.vx += WORLD_ENV.wind * (p.type === 'smoke' || p.type === 'fire' ? 0.8 : 0.3);
     switch (p.type) {
       case 'blood':
         return this.stepBlood(p, terrain, G);

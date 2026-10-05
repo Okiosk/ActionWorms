@@ -19,7 +19,12 @@ export type WeaponId =
   | 'force_lightning'
   | 'meteor'
   | 'railgun'
-  | 'vortex';
+  | 'vortex'
+  | 'portal'
+  | 'hot_potato'
+  | 'tornado'
+  | 'decoy'
+  | 'antigravity';
 
 /** Lasting curses applied to the wizards that are hit */
 export type StatusEffect = 'sheep' | 'bubble' | 'drunk';
@@ -59,6 +64,11 @@ export interface WeaponDef {
   meteorCount?: number;     // calls this many meteors from the sky where it lands
   shieldDuration?: number;  // self-cast: reflecting shield for this many ticks (no projectile)
   fire?: boolean;           // fire spell: burns wood, fizzles in water
+  portal?: boolean;         // opens a portal where it lands (2 per caster, linked)
+  hotPotato?: boolean;      // sticks to the wizard it touches, jumps to whoever he touches, then blows up
+  tornado?: boolean;        // whirlwind rolling along the ground, lifting and carrying wizards
+  decoy?: boolean;          // a walking fake copy of the caster that explodes
+  antigravity?: boolean;    // zone where gravity is reversed for a few seconds
   elementColor: string;
   spellSchool: string;
 }

@@ -4,6 +4,7 @@ import { Terrain } from './Terrain';
 import { ParticleManager } from './Particles';
 import { drawFx } from './Sprites';
 import { Worm } from './Worm';
+import { WORLD_ENV } from './Env';
 
 /** What a projectile needs from the game world. Game implements it (host only). */
 export interface ProjectileWorld {
@@ -20,7 +21,16 @@ export interface ProjectileWorld {
   reflect(p: Projectile): void;
   /** A frog jumped. */
   hop(p: Projectile): void;
+  /** All spells in flight (homing spells also chase enemy decoys) */
+  projectiles: Projectile[];
+  /** Small damage dealt by a spell without exploding (tornado) */
+  hurt(w: Worm, dmg: number, ownerId: string): void;
+  /** The hot potato changed hands */
+  pass(p: Projectile, to: Worm): void;
 }
+
+/** Something a homing spell can chase */
+interface Target { x: number; y: number }
 
 export interface ProjectileParams {
   id: number;
@@ -64,6 +74,12 @@ export class Projectile {
   private trailTick = 0;
   /** Frogs: ticks before the next jump */
   private hopTimer = 10;
+  /** Hot potato: id of the wizard carrying it ('' = loose) — synced for rendering */
+  public attachedTo = '';
+  private passCooldown = 0;
+  private caught = false;
+  /** Ticks before it can go through a portal again */
+  public portalCooldown = 0;
 
   constructor(p: ProjectileParams) {
     this.id = p.id;
@@ -86,12 +102,27 @@ export class Projectile {
     this.age++;
     if (this.weapon.sticky) this.armed = this.age >= MINE_ARM_DELAY;
 
+    if (this.portalCooldown > 0) this.portalCooldown--;
     if (--this.fuse <= 0) {
-      this.detonate(world, null);
+      const carrier = this.attachedTo ? worms.find(w => w.id === this.attachedTo) ?? null : null;
+      this.detonate(world, carrier);
       return;
     }
 
     this.spawnTrail(particles);
+
+    if (this.weapon.tornado) {
+      this.updateTornado(world);
+      return;
+    }
+    if (this.weapon.decoy) {
+      this.updateDecoy(world);
+      return;
+    }
+    if (this.weapon.hotPotato && this.attachedTo) {
+      this.updateCarried(world);
+      return;
+    }
 
     // Rune trap: explodes when an enemy (or its caster, once he walked away) comes close
     if (this.weapon.sticky && this.armed) {
@@ -100,6 +131,17 @@ export class Projectile {
         if (w.id === this.ownerId && this.age < 120) continue;
         if (Math.hypot(w.x - this.x, w.y - this.y) < 22) {
           this.detonate(world, null);
+          return;
+        }
+      }
+    }
+
+    // A loose hot potato is picked up by whoever walks into it
+    if (this.weapon.hotPotato) {
+      for (const w of worms) {
+        if (!w.isAlive() || (w.id === this.ownerId && this.age < SELF_HIT_DELAY)) continue;
+        if (Math.hypot(w.x - this.x, w.y - this.y) < 9) {
+          this.catch(w, world);
           return;
         }
       }
@@ -116,7 +158,7 @@ export class Projectile {
       }
       if (this.hopTimer > 0) this.hopTimer--;
       if (this.hopTimer <= 0 && this.vy >= -0.2 && (this.resting || terrain.isSolid(this.x, this.y + 3))) {
-        const target = this.findTarget(worms, 420);
+        const target = this.findTarget(world, 420);
         const dir = target ? Math.sign(target.x - this.x) || 1 : this.vx >= 0 ? 1 : -1;
         const high = target && target.y < this.y - 18;
         this.vx = dir * (1.1 + Math.random() * 0.6);
@@ -145,9 +187,10 @@ export class Projectile {
       this.vy *= 0.94;
     }
 
-    this.vy += CONFIG.GRAVITY * this.weapon.gravityScale * (inWater ? 0.3 : 1);
+    this.vy += CONFIG.GRAVITY * this.weapon.gravityScale * (inWater ? 0.3 : 1) * WORLD_ENV.gravityAt(this.x, this.y);
+    if (this.weapon.gravityScale > 0) this.vx += WORLD_ENV.wind * 1.6;
 
-    if (this.weapon.homing && this.age > 15) this.steerTowards(this.findTarget(worms, 320), 0.11);
+    if (this.weapon.homing && this.age > 15) this.steerTowards(this.findTarget(world, 320), 0.11);
 
     if (this.weapon.boomerang && this.age >= this.weapon.fuseFrames / 2) {
       if (!this.returning) {
@@ -217,6 +260,10 @@ export class Projectile {
           if (this.age < SELF_HIT_DELAY) continue;
         }
         if (this.weapon.sticky) continue; // traps only trigger by proximity
+        if (this.weapon.hotPotato) {
+          this.catch(w, world);
+          return;
+        }
         this.x = nx;
         this.y = ny;
         this.detonate(world, w);
@@ -309,10 +356,11 @@ export class Projectile {
     return { nx: -this.vx / sp, ny: -this.vy / sp };
   }
 
-  private findTarget(worms: Worm[], range: number): Worm | null {
-    let best: Worm | null = null;
+  /** Nearest enemy wizard — or enemy decoy, which fools homing spells */
+  private findTarget(world: ProjectileWorld, range: number): Target | null {
+    let best: Target | null = null;
     let bestDist = range;
-    for (const w of worms) {
+    for (const w of world.worms) {
       if (w.id === this.ownerId || !w.isAlive()) continue;
       const d = Math.hypot(w.x - this.x, w.y - this.y);
       if (d < bestDist) {
@@ -320,7 +368,143 @@ export class Projectile {
         best = w;
       }
     }
+    for (const p of world.projectiles) {
+      if (!p.alive || !p.weapon.decoy || p.ownerId === this.ownerId) continue;
+      const d = Math.hypot(p.x - this.x, p.y - this.y) * 0.8; // decoys look juicier
+      if (d < bestDist) {
+        bestDist = d;
+        best = p;
+      }
+    }
     return best;
+  }
+
+  // ── Hot potato ──────────────────────────────────────────────────────────
+
+  private catch(w: Worm, world: ProjectileWorld) {
+    this.attachedTo = w.id;
+    this.vx = this.vy = 0;
+    this.resting = false;
+    this.passCooldown = 25;
+    if (!this.caught) {
+      this.caught = true;
+      this.fuse = Math.min(this.fuse, 240); // 4 s from the first catch
+    }
+    world.pass(this, w);
+  }
+
+  /** Rides above the carrier's head and jumps to any wizard he touches */
+  private updateCarried(world: ProjectileWorld) {
+    const carrier = world.worms.find(w => w.id === this.attachedTo);
+    if (!carrier || !carrier.isAlive()) {
+      this.attachedTo = ''; // dropped
+      this.vy = -1;
+      return;
+    }
+    this.x = carrier.x;
+    this.y = carrier.y - 16;
+    if (this.passCooldown > 0) {
+      this.passCooldown--;
+      return;
+    }
+    for (const w of world.worms) {
+      if (w === carrier || !w.isAlive()) continue;
+      if (Math.hypot(w.x - carrier.x, w.y - carrier.y) < 13) {
+        this.catch(w, world);
+        return;
+      }
+    }
+  }
+
+  // ── Tornado ─────────────────────────────────────────────────────────────
+
+  /** Rolls along the ground (climbs slopes, turns back at walls), sucking wizards up */
+  private updateTornado(world: ProjectileWorld) {
+    const t = world.terrain;
+    let dir = this.vx >= 0 ? 1 : -1;
+    const speed = this.weapon.projectileSpeed;
+    let nx = this.x + dir * speed;
+    let ny = this.y;
+    let climb = 0;
+    while (t.isSolid(nx, ny) && climb < 10) {
+      ny -= 1;
+      climb++;
+    }
+    if (t.isSolid(nx, ny)) {
+      dir = -dir;
+      nx = this.x;
+      ny = this.y;
+    }
+    for (let fall = 0; fall < 4 && !t.isSolid(nx, ny + 1); fall++) ny += 1;
+    this.x = nx;
+    this.y = ny;
+    this.vx = dir * speed;
+    this.vy = 0;
+
+    for (const w of world.worms) {
+      if (!w.isAlive()) continue;
+      const dx = w.x - this.x;
+      const dy = w.y - this.y;
+      if (Math.abs(dx) > 16 || dy > 8 || dy < -46) continue;
+      // Caught in the funnel: spun around its axis and lifted
+      w.rope.release();
+      w.vx = w.vx * 0.7 + (dir * speed - dx * 0.12) * 0.3;
+      w.vy = Math.max(-2.2, w.vy - 0.45);
+      if (this.age % 15 === 0) world.hurt(w, 2, this.ownerId);
+    }
+  }
+
+  // ── Decoy ───────────────────────────────────────────────────────────────
+
+  /** Walks straight ahead like a real wizard, hops now and then, explodes when approached */
+  private updateDecoy(world: ProjectileWorld) {
+    const t = world.terrain;
+    for (const w of world.worms) {
+      if (w.isAlive() && w.id !== this.ownerId && Math.hypot(w.x - this.x, w.y - this.y) < 13) {
+        this.detonate(world, w);
+        return;
+      }
+    }
+    const dir = this.vx >= 0 ? 1 : -1;
+    const grounded = t.isSolid(this.x, this.y + 6);
+    if (grounded) {
+      // Walk, climbing small steps
+      let nx = this.x + dir * 1.1;
+      let ny = this.y;
+      let climb = 0;
+      while ((t.isSolid(nx, ny + 4) || t.isSolid(nx + dir * 4, ny)) && climb < 5) {
+        ny -= 1;
+        climb++;
+      }
+      if (t.isSolid(nx + dir * 4, ny) || t.isSolid(nx, ny - 5)) {
+        this.vx = -dir * 1.1; // a wall: turn around
+        nx = this.x;
+        ny = this.y;
+      } else {
+        this.vx = dir * 1.1;
+      }
+      this.x = nx;
+      this.y = ny;
+      this.vy = 0;
+      if (this.age % 70 === 35) this.vy = -2.4; // a little hop, like players do
+    }
+    if (!grounded || this.vy < 0) {
+      this.vy = Math.min(5, this.vy + CONFIG.GRAVITY * WORLD_ENV.gravityAt(this.x, this.y));
+      const steps = Math.ceil(Math.abs(this.vy) + Math.abs(this.vx));
+      for (let i = 0; i < steps; i++) {
+        const sx = this.x + this.vx / steps;
+        const sy = this.y + this.vy / steps;
+        if (t.isSolid(sx, sy + 5.5) && this.vy > 0) {
+          this.vy = 0;
+          break;
+        }
+        if (t.isSolid(sx, sy - 5) && this.vy < 0) this.vy = 0;
+        if (!t.isSolid(sx + Math.sign(this.vx) * 4, sy)) this.x = sx;
+        this.y = sy;
+      }
+    }
+    // Snap out of the ground
+    for (let k = 0; k < 6 && t.isSolid(this.x, this.y + 4); k++) this.y -= 1;
   }
 
   private steerTowards(target: { x: number; y: number } | null, turnSpeed: number) {
@@ -365,6 +549,22 @@ export class Projectile {
         break;
       case 'bubble':
         if (t % 4 === 0) particles.spawn(x + r() * 6, y + r() * 6, r() * 0.2, -0.25, 'glow', '#cfeeff', 3, 30);
+        break;
+      case 'portal':
+        particles.spawn(x + r() * 3, y + r() * 3, r() * 0.3, r() * 0.3, 'spark', t % 2 ? '#4fd8ff' : '#ff9a3c', 0.8, 14);
+        break;
+      case 'hot_potato':
+        if (t % 2 === 0) particles.spawn(x + 2, y - 6, r() * 0.6, -0.8, 'spark', '#ffd27a', 0.7, 12);
+        if (t % 6 === 0) particles.spawn(x, y - 5, r() * 0.2, -0.3, 'smoke', '#6b6468', 4, 25);
+        break;
+      case 'tornado':
+        if (t % 2 === 0) {
+          const a = Math.random() * Math.PI * 2;
+          particles.spawn(x + Math.cos(a) * 12, y - 4, -Math.sin(a) * 1.2, -0.8 - Math.random(), 'dirt', undefined, 1.2, 30);
+        }
+        break;
+      case 'antigravity':
+        particles.spawn(x + r() * 4, y + r() * 4, r() * 0.2, -0.6, 'spark', '#d2b4ff', 0.8, 16);
         break;
       case 'swap':
         particles.spawn(x, y, r() * 0.3, r() * 0.3, 'spark', t % 2 ? '#38d6ff' : '#ff9a3c', 0.9, 12);
@@ -499,6 +699,67 @@ export class Projectile {
         drawFx(ctx, 'circle_02', x, y, 13 + pulse, '#e6f7ff', 0.85);
         drawFx(ctx, 'circle_05', x - 2.5, y - 2.5, 3.5, '#ffffff', 0.9);
         break;
+      case 'portal': // Portails Jumeaux: the seed of a portal
+        drawFx(ctx, 'twirl_02', x, y, 13, color, 1, spin * 4);
+        drawFx(ctx, 'circle_05', x, y, 7, '#ffffff', 1);
+        break;
+      case 'antigravity': // Anomalie: an inverted droplet of void
+        drawFx(ctx, 'circle_05', x, y, 15 + pulse * 3, color, 0.7);
+        drawFx(ctx, 'magic_03', x, y, 12, '#e8dcff', 0.9, -spin * 2);
+        break;
+      case 'tornado': { // Tornade: a funnel of spinning wind, wide at the top
+        for (let k = 0; k < 6; k++) {
+          const h = k / 5;
+          const wob = Math.sin(now * 0.008 + k * 0.9) * (2 + h * 4);
+          drawFx(ctx, k % 2 ? 'twirl_01' : 'twirl_02', x + wob, y - 4 - h * 36, 10 + h * 26, '#dfe9f2', 0.45 + (1 - h) * 0.25, spin * (5 - h * 2) * (k % 2 ? 1 : -1));
+        }
+        ctx.globalCompositeOperation = 'source-over';
+        drawFx(ctx, 'smoke_04', x, y - 2, 18, '#8a7a66', 0.45, spin);
+        break;
+      }
+      case 'hot_potato': { // Patate Chaude: a potato with a fizzing fuse, blinking near the end
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1;
+        const urgent = this.fuse < 90 && Math.floor(now / 100) % 2 === 0;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(this.attachedTo ? Math.sin(now * 0.02) * 0.3 : spin);
+        ctx.fillStyle = urgent ? '#ff5a2a' : '#b98546';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 4.6, 3.6, 0.3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(80, 50, 20, 0.7)';
+        for (const [ex, ey] of [[-1.8, -0.6], [1.2, 1.1], [0.6, -1.6]]) {
+          ctx.beginPath();
+          ctx.arc(ex, ey, 0.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.strokeStyle = '#3a2a1a';
+        ctx.lineWidth = 0.7;
+        ctx.beginPath();
+        ctx.moveTo(1.5, -3);
+        ctx.quadraticCurveTo(3, -5.5, 2, -6.5);
+        ctx.stroke();
+        ctx.restore();
+        ctx.globalCompositeOperation = 'lighter';
+        drawFx(ctx, 'star_04', x + 2, y - 6.5, 6 + Math.random() * 3, '#ffd27a', 1, Math.random() * 3);
+        if (this.attachedTo) {
+          // Countdown above the carrier
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.globalAlpha = 1;
+          ctx.font = '700 6px Inter, system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.lineWidth = 1.6;
+          ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+          const label = String(Math.ceil(this.fuse / 60));
+          ctx.strokeText(label, x, y - 9);
+          ctx.fillStyle = urgent ? '#ff5a2a' : '#ffe36b';
+          ctx.fillText(label, x, y - 9);
+        }
+        break;
+      }
+      case 'decoy':
+        break; // drawn by the game as a wizard (needs the caster's colour and name)
       case 'swap': // Permutation: two orbs chasing each other
         for (const [k, c] of [[0, '#38d6ff'], [Math.PI, '#ff9a3c']] as const) {
           const a = spin * 4 + k;

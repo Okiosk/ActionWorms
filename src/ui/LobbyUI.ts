@@ -1,7 +1,8 @@
 import { CONFIG } from '../config';
 import { Game, MatchResult } from '../engine/Game';
 import { Terrain } from '../engine/Terrain';
-import { GameMode, MapType, MatchModifiers } from '../net/Protocol';
+import { GameMode, MapType } from '../net/Protocol';
+import { MUTATORS, MUTATOR_GROUPS, MutatorId, rulesOf } from '../engine/Mutators';
 
 const MAPS: Record<MapType, { name: string; icon: string; desc: string }> = {
   cave: { name: 'Grottes', icon: '💎', desc: 'Cavernes organiques, lacs souterrains et filons de cristal à faire exploser pour de l\'or.' },
@@ -9,7 +10,10 @@ const MAPS: Record<MapType, { name: string; icon: string; desc: string }> = {
   forest: { name: 'Forêt', icon: '🌳', desc: 'Arbres géants, rivière, terriers et champignons-trampolines.' },
   citadel: { name: 'Citadelle', icon: '🏰', desc: 'Deux châteaux symétriques, douves, pont-levis et salle au trésor.' },
   glacier: { name: 'Glacier', icon: '🏔️', desc: 'Pentes de glace glissantes, lacs gelés et grottes de glace.' },
-  sky: { name: 'Archipel', icon: '☁️', desc: 'Îles flottantes au-dessus de l\'océan : grappin indispensable.' }
+  sky: { name: 'Archipel', icon: '☁️', desc: 'Îles flottantes au-dessus de l\'océan : grappin indispensable.' },
+  desert: { name: 'Pyramide', icon: '🏜️', desc: 'Dunes de sable qui s\'effondrent dans les grottes, pyramide au tombeau piégé, oasis.' },
+  mine: { name: 'Mine', icon: '⛏️', desc: 'Galeries étayées sur 4 niveaux, barils de poudre explosive et filons de cristal.' },
+  hourglass: { name: 'Sablier', icon: '⏳', desc: 'Un sablier géant : brise le goulot de cristal et le sable dégringole.' }
 };
 
 const MODES: { id: GameMode; name: string; desc: string }[] = [
@@ -18,20 +22,8 @@ const MODES: { id: GameMode; name: string; desc: string }[] = [
   { id: 'koth', name: '👑 Colline', desc: 'Tenir la zone' }
 ];
 
-type Opt = [unknown, string];
-interface Setting { key: keyof MatchModifiers; label: string; options: Opt[] }
-
-const ADVANCED: Setting[] = [
-  { key: 'gravity', label: 'Gravité', options: [[1, 'Normale'], [0.35, 'Lunaire'], [1.8, 'Forte'], [0, 'Zéro-G']] },
-  { key: 'ropeReach', label: 'Grappin', options: [['normal', 'Normal (220 px)'], ['infinite', 'Portée infinie']] },
-  { key: 'wormSpeed', label: 'Vitesse', options: [[1, 'Normale'], [1.5, 'Rapide'], [0.75, 'Lente']] },
-  { key: 'maxHealth', label: 'Points de vie', options: [[100, '100 PV'], [50, '50 PV'], [200, '200 PV']] },
-  { key: 'damageScale', label: 'Dégâts', options: [[1, '×1'], [0.5, '×0,5'], [2, '×2'], [3, '×3']] },
-  { key: 'explosionScale', label: 'Taille des explosions', options: [[1, '×1'], [0.5, '×0,5'], [2, '×2']] },
-  { key: 'regenRate', label: 'Régénération', options: [[0, 'Aucune'], [1, '1 PV/s'], [3, '3 PV/s']] },
-  { key: 'noSelfDamage', label: 'Auto-dégâts', options: [[false, 'Oui'], [true, 'Non']] },
-  { key: 'acidEnabled', label: 'Acide et lave', options: [[true, 'Oui'], [false, 'Non']] }
-];
+const HEALTH_OPTIONS: [number, string][] = [[50, '50'], [100, '100'], [200, '200']];
+const DAMAGE_OPTIONS: [number, string][] = [[0.5, '×½'], [1, '×1'], [2, '×2']];
 
 const FRAG_LIMITS = [5, 10, 15, 20, 30];
 
@@ -254,21 +246,36 @@ export class LobbyUI {
               </div>
               <div class="hint" id="map-desc"></div>
             </div>
-            <div class="panel">
-              <details class="advanced">
-                <summary>Options avancées</summary>
-                <div class="settings-grid">
-                  ${ADVANCED.map(s => `
-                    <label class="field">
-                      <span>${s.label}</span>
-                      <select data-key="${s.key}" ${dis}>
-                        ${s.options.map(([v, l]) => `<option value='${JSON.stringify(v)}'>${l}</option>`).join('')}
-                      </select>
-                    </label>`).join('')}
-                </div>
-              </details>
-            </div>
           </div>
+        </div>
+
+        <div class="panel mutators-panel">
+          <div class="mut-head">
+            <div class="label">Mutateurs <span class="mut-count" id="mut-count"></span></div>
+            <div class="mut-rules">
+              <span>❤️ PV</span>
+              <div class="mini-seg" id="hp">${HEALTH_OPTIONS.map(([v, l]) => `<button data-hp="${v}" ${dis}>${l}</button>`).join('')}</div>
+              <span>⚔️ Dégâts</span>
+              <div class="mini-seg" id="dmg">${DAMAGE_OPTIONS.map(([v, l]) => `<button data-dmg="${v}" ${dis}>${l}</button>`).join('')}</div>
+            </div>
+            ${isHost ? `<div class="mut-actions">
+              <button class="btn btn-sm" id="mut-random" title="Active 3 mutateurs au hasard">🎲 Surprise</button>
+              <button class="btn btn-sm btn-ghost" id="mut-clear">Tout désactiver</button>
+            </div>` : ''}
+          </div>
+          <div class="hint">${isHost ? 'Clique sur une carte pour l\'activer ou la désactiver.' : 'Choisis par l\'hôte.'}</div>
+          ${MUTATOR_GROUPS.map(gr => `
+            <div class="mut-group">
+              <div class="mut-group-name">${gr.name}</div>
+              <div class="mut-grid">
+                ${MUTATORS.filter(m => m.group === gr.id).map(m => `
+                  <button class="mut" data-mut="${m.id}" ${dis} aria-pressed="false">
+                    <span class="mut-icon">${m.icon}</span>
+                    <span class="mut-text"><b>${m.name}</b><small>${m.desc}</small></span>
+                    <span class="mut-switch"></span>
+                  </button>`).join('')}
+              </div>
+            </div>`).join('')}
         </div>
 
         <div class="lobby-foot">
@@ -303,9 +310,26 @@ export class LobbyUI {
         b.addEventListener('click', () => this.game.setModifiers({ mapType: b.dataset.map as MapType })));
       this.on('#fragLimit', 'change', (e) =>
         this.game.setModifiers({ fragLimit: Number((e.target as HTMLSelectElement).value) }));
-      this.el.querySelectorAll<HTMLSelectElement>('select[data-key]').forEach(sel =>
-        sel.addEventListener('change', () =>
-          this.game.setModifiers({ [sel.dataset.key!]: JSON.parse(sel.value) } as Partial<MatchModifiers>)));
+      this.el.querySelectorAll<HTMLButtonElement>('[data-mut]').forEach(b =>
+        b.addEventListener('click', () => {
+          const id = b.dataset.mut as MutatorId;
+          const cur = this.game.modifiers.mutators;
+          this.game.setModifiers({ mutators: cur.includes(id) ? cur.filter(m => m !== id) : [...cur, id] });
+        }));
+      this.el.querySelectorAll<HTMLButtonElement>('[data-hp]').forEach(b =>
+        b.addEventListener('click', () => this.game.setModifiers({ maxHealth: Number(b.dataset.hp) })));
+      this.el.querySelectorAll<HTMLButtonElement>('[data-dmg]').forEach(b =>
+        b.addEventListener('click', () => this.game.setModifiers({ damageScale: Number(b.dataset.dmg) })));
+      this.on('#mut-clear', 'click', () => this.game.setModifiers({ mutators: [] }));
+      this.on('#mut-random', 'click', () => {
+        const fun = MUTATORS.filter(m => m.group !== 'rules').map(m => m.id);
+        const picked: MutatorId[] = [];
+        while (picked.length < 3) {
+          const id = fun[Math.floor(Math.random() * fun.length)];
+          if (!picked.includes(id)) picked.push(id);
+        }
+        this.game.setModifiers({ mutators: picked });
+      });
       this.$('#players')?.addEventListener('click', (e) => {
         const chip = (e.target as HTMLElement).closest<HTMLElement>('[data-team]');
         if (chip) this.game.toggleTeam(chip.dataset.team!);
@@ -357,9 +381,15 @@ export class LobbyUI {
       `<option value="${v}">${koth ? `${(v * CONFIG.KOTH_SECONDS_PER_POINT) / 60} min` : v}</option>`).join('');
     goal.value = String(mods.fragLimit);
 
-    this.el.querySelectorAll<HTMLSelectElement>('select[data-key]').forEach(sel => {
-      sel.value = JSON.stringify(mods[sel.dataset.key as keyof MatchModifiers]);
+    const active = mods.mutators ?? [];
+    this.el.querySelectorAll<HTMLElement>('[data-mut]').forEach(b => {
+      const on = active.includes(b.dataset.mut as MutatorId);
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', String(on));
     });
+    (this.$('#mut-count') as HTMLElement).textContent = active.length ? `${active.length} actif${active.length > 1 ? 's' : ''}` : 'aucun : partie classique';
+    this.el.querySelectorAll<HTMLElement>('[data-hp]').forEach(b => b.classList.toggle('active', Number(b.dataset.hp) === mods.maxHealth));
+    this.el.querySelectorAll<HTMLElement>('[data-dmg]').forEach(b => b.classList.toggle('active', Number(b.dataset.dmg) === mods.damageScale));
 
     (this.$('#map-desc') as HTMLElement).textContent = MAPS[mods.mapType]?.desc ?? '';
     this.drawPreview();
@@ -368,7 +398,8 @@ export class LobbyUI {
   private drawPreview() {
     const mods = this.game.modifiers;
     const zone = mods.gameMode === 'koth' ? CONFIG.KOTH_ZONE_RADIUS : 0;
-    const key = `${mods.mapSeed}|${mods.mapType}|${mods.acidEnabled}|${zone}`;
+    const hazards = rulesOf(mods.mutators).hazards;
+    const key = `${mods.mapSeed}|${mods.mapType}|${hazards}|${zone}`;
     if (key === this.previewKey) return;
     this.previewKey = key;
     const canvas = this.$('#preview') as HTMLCanvasElement | null;
@@ -376,7 +407,7 @@ export class LobbyUI {
     if (!canvas || !ctx) return;
 
     const t = new Terrain();
-    t.generateMap(mods.mapSeed, mods.mapType, mods.acidEnabled, zone);
+    t.generateMap(mods.mapSeed, mods.mapType, hazards, zone);
     t.drawPreview(ctx, canvas.width, canvas.height);
   }
 

@@ -186,6 +186,51 @@ export const WEAPON_REGISTRY: Record<WeaponId, WeaponDef> = {
     bounces: 0, fuseFrames: 25, gravityScale: 0.0, piercing: true,
     elementColor: '#ffff66', spellSchool: 'Foudre sacrée'
   },
+  hot_potato: {
+    id: 'hot_potato',
+    name: 'Patate Chaude',
+    description: 'Une bombe qui colle au premier sorcier touché et saute sur quiconque il touche. Elle explose 4 s après la première prise. Refile-la !',
+    price: 100, cooldown: 90,
+    projectileSpeed: 4.5, spread: 0.02, damage: 65, craterRadius: 24,
+    bounces: 99, fuseFrames: 420, gravityScale: 0.8, hotPotato: true, fire: true,
+    elementColor: '#ff8c2a', spellSchool: 'Cuisine infernale'
+  },
+  decoy: {
+    id: 'decoy',
+    name: 'Sosie Piégé',
+    description: 'Un faux toi (même couleur, même nom) qui marche droit devant et attire les sorts à tête chercheuse. Il explose si on s\'en approche.',
+    price: 125, cooldown: 80,
+    projectileSpeed: 2.6, spread: 0, damage: 45, craterRadius: 18,
+    bounces: 0, fuseFrames: 600, gravityScale: 1, decoy: true,
+    elementColor: '#ffd76a', spellSchool: 'Illusion'
+  },
+  portal: {
+    id: 'portal',
+    name: 'Portails Jumeaux',
+    description: 'Ouvre un portail là où l\'orbe atterrit. Avec deux portails, tout ce qui entre dans l\'un sort de l\'autre : sorciers et sorts (25 s).',
+    price: 150, cooldown: 40,
+    projectileSpeed: 7.0, spread: 0, damage: 0, craterRadius: 0,
+    bounces: 0, fuseFrames: 120, gravityScale: 0.3, portal: true,
+    elementColor: '#4fd8ff', spellSchool: 'Distorsion'
+  },
+  tornado: {
+    id: 'tornado',
+    name: 'Tornade',
+    description: 'Un tourbillon qui roule au ras du sol pendant 5 s, aspire les sorciers et les projette en l\'air à sa disparition.',
+    price: 175, cooldown: 100,
+    projectileSpeed: 1.7, spread: 0, damage: 0, craterRadius: 0,
+    bounces: 0, fuseFrames: 300, gravityScale: 0, tornado: true,
+    elementColor: '#d8e6f0', spellSchool: 'Aéromancie'
+  },
+  antigravity: {
+    id: 'antigravity',
+    name: 'Anomalie Gravitationnelle',
+    description: 'Crée pendant 6 s une zone où la gravité s\'inverse : sorciers, sorts et sang tombent vers le haut.',
+    price: 200, cooldown: 120,
+    projectileSpeed: 5.5, spread: 0, damage: 0, craterRadius: 0,
+    bounces: 0, fuseFrames: 90, gravityScale: 0.4, antigravity: true,
+    elementColor: '#b07cff', spellSchool: 'Gravimancie'
+  },
   vortex: {
     id: 'vortex',
     name: 'Singularité du Néant',
@@ -205,4 +250,4 @@ export const DEFAULT_WEAPON: WeaponId = 'bazooka';
 /** Gold rewards */
 export const MONEY_KILL = 75;     // per kill
 export const MONEY_DEATH = 25;    // consolation per death
-export const MONEY_START = 10000; // starting gold (test value)
+export const MONEY_START = 100;   // starting gold (the « Grimoire ouvert » mutator makes every spell free)
