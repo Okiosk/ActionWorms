@@ -92,7 +92,7 @@ export type NetEvent =
   | { t: 'portal'; o: string; x: number; y: number }   // new portal of the caster o
   | { t: 'zone'; x: number; y: number }   // gravity anomaly
   | { t: 'lava'; y: number; w?: 1 }   // rising lava reached y (w = water when hazards are off)
-  | { t: 'kill'; killer: string | null; victim: string; cause?: KillCause };
+  | { t: 'kill'; killer: string | null; victim: string; cause?: KillCause; ki?: string; vi?: string };
 
 export type KillCause = 'acid' | 'lava' | 'self';
 

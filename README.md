@@ -88,6 +88,13 @@ Les sorciers sont des personnages peints et animés : repos, course, saut, coup 
 
 Le sang gicle dans la direction du coup. Il tache tous les matériaux solides, roche comprise, et coule le long des murs. Les taches disparaissent avec le terrain détruit.
 
+Pour le ressenti (« juice ») :
+- **Caméra** : elle secoue avec les explosions proches et les coups reçus, recule quand tu lances un sort et regarde un peu dans la direction visée. Les secousses se désactivent dans le menu pause.
+- **Sorciers** : ils s'écrasent à l'atterrissage, s'étirent au saut, flashent en blanc quand ils sont touchés et soulèvent de la poussière en courant.
+- **Chiffres flottants** : dégâts, soins, or gagné et « K.O. ! ».
+- **Effets d'écran** : bords rouges quand tu es touché, pulsation rouge quand ta vie est basse, éclair lumineux pour les grosses explosions.
+- **Annonces** : « Éliminé ! », puis « Double élimination ! », « Triple ! »… quand tu enchaînes les éliminations.
+
 Les auteurs et licences des images sont listés dans [CREDITS.md](CREDITS.md).
 
 ## Sorts

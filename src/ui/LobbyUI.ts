@@ -462,6 +462,7 @@ export class LobbyUI {
         <p class="tagline">La partie continue pour les autres joueurs.</p>
         <button class="btn btn-primary btn-big" id="resume">Reprendre</button>
         <button class="btn" id="gfx">Graphismes : ${this.game.smoothActive ? 'lisses' : 'pixel'}</button>
+        <button class="btn" id="shake">Secousses de caméra : ${this.game.cameraFx.shakeEnabled ? 'oui' : 'non'}</button>
         ${this.game.role === 'host' ? '<button class="btn" id="lobby">Arrêter et revenir au salon</button>' : ''}
         <button class="btn btn-ghost" id="leave">Quitter la partie</button>
       </div>
@@ -470,6 +471,11 @@ export class LobbyUI {
     this.on('#gfx', 'click', (e) => {
       const smooth = this.game.setSmoothTerrain(!this.game.smoothActive);
       (e.currentTarget as HTMLButtonElement).textContent = `Graphismes : ${smooth ? 'lisses' : 'pixel'}`;
+    });
+    this.on('#shake', 'click', (e) => {
+      const fx = this.game.cameraFx;
+      fx.setShake(!fx.shakeEnabled);
+      (e.currentTarget as HTMLButtonElement).textContent = `Secousses de caméra : ${fx.shakeEnabled ? 'oui' : 'non'}`;
     });
     this.on('#lobby', 'click', () => this.game.returnToLobby());
     this.on('#leave', 'click', () => {

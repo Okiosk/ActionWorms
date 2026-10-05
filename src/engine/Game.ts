@@ -1,11 +1,12 @@
 import { CONFIG } from '../config';
 import { Terrain } from './Terrain';
 import { TerrainGL } from './TerrainGL';
-import { Worm, WormInput, EMPTY_INPUT, WormFx, WIZARD_FOOT, WIZARD_HEIGHT, FROZEN_ROBE } from './Worm';
+import { Worm, WormInput, EMPTY_INPUT, WormFx, WIZARD_FOOT, WIZARD_HEIGHT, FROZEN_ROBE, WORM_FX } from './Worm';
 import { drawWizard, animFrames, prepareWizards, drawFx } from './Sprites';
 import { GasCloud } from './GasCloud';
 import { has, rulesOf, Rules } from './Mutators';
 import { WORLD_ENV } from './Env';
+import { CameraFx, FloatingTexts, ScreenFlash, damageColor, hexToRgbString } from './Juice';
 import { computeLightning, drawLightning } from './ForceLightning';
 import { Projectile, ProjectileWorld } from './Projectile';
 import { ParticleManager } from './Particles';
@@ -95,9 +96,15 @@ export class Game implements ProjectileWorld {
   // Rendering
   private lastTickTime = 0;
   private lastRenderTime = 0;
+  private lastFxTime = 0;
   private frame = 0;
-  private shakeTime = 0;
-  private shakeIntensity = 0;
+  // Game feel (local, visual only)
+  public readonly cameraFx = new CameraFx();
+  private texts = new FloatingTexts();
+  private screenFlash = new ScreenFlash();
+  /** Health seen at the previous tick, to pop damage / heal numbers */
+  private hpTrack = new Map<string, { hp: number; dmg: number; heal: number; first: number; last: number }>();
+  private lastLocalMoney = -1;
   /** Fallen wizards playing their death animation (purely visual) */
   private corpses: Corpse[] = [];
   /** Toxic clouds of the Fiole Pestilentielle (host and clients) */
@@ -133,7 +140,7 @@ export class Game implements ProjectileWorld {
   public onMatchStart?: () => void;
   public onMatchOver?: (result: MatchResult) => void;
   public onReturnToLobby?: () => void;
-  public onKill?: (killer: string | null, victim: string, cause?: KillCause) => void;
+  public onKill?: (killer: string | null, victim: string, cause?: KillCause, killerId?: string, victimId?: string) => void;
   /** The local wizard died (or the match starts): open the grimoire */
   public onLocalDeath?: (worm: Worm) => void;
   /** The connection to the host was lost */
@@ -339,6 +346,11 @@ export class Game implements ProjectileWorld {
     this.portals = [];
     this.zones = [];
     this.pendingBlasts = [];
+    this.texts.clear();
+    this.cameraFx.reset();
+    this.hpTrack.clear();
+    this.lastLocalMoney = -1;
+    WORM_FX.length = 0;
     this.wind = 0;
     WORLD_ENV.wind = 0;
     this.matchTicks = 0;
@@ -549,7 +561,6 @@ export class Game implements ProjectileWorld {
     if (!this.isInMatch()) return;
     this.lastTickTime = performance.now();
     this.frame++;
-    if (this.shakeTime > 0) this.shakeTime--;
 
     if (this.role === 'client') {
       this.updateClient();
@@ -566,6 +577,7 @@ export class Game implements ProjectileWorld {
       }
     }
     this.updateCorpses();
+    this.updateNumbers();
     this.updateFields();
     this.updateGas();
     this.curseEffects();
@@ -754,10 +766,17 @@ export class Game implements ProjectileWorld {
   private castFX(worm: Worm, weapon: WeaponDef, angle: number) {
     if (weapon.channel) {
       worm.channelTimer = 6;
+      if (worm.id === this.localId) this.cameraFx.addTrauma(0.04);
       return; // crackling sound and arcs are handled while rendering
     }
     sound.playSpellForWeapon(weapon.id);
     worm.onCast();
+    if (worm.id === this.localId) {
+      // Recoil: the camera jolts backwards, harder for heavy spells
+      const k = 1.2 + Math.min(4, weapon.damage / 14);
+      this.cameraFx.kick(-Math.cos(angle) * k, -Math.sin(angle) * k);
+      if (weapon.damage >= 45) this.cameraFx.addTrauma(0.12);
+    }
     const c = Math.cos(angle);
     const s = Math.sin(angle);
     const x = worm.x + worm.facing * 1.5 + c * 10;
@@ -1200,8 +1219,8 @@ export class Game implements ProjectileWorld {
     else if (!killer || killer === victim) cause = 'self';
 
     const validKill = killer && killer !== victim;
-    this.emit({ t: 'kill', killer: validKill ? killer.name : null, victim: victim.name, cause });
-    this.onKill?.(validKill ? killer.name : null, victim.name, cause);
+    this.emit({ t: 'kill', killer: validKill ? killer.name : null, victim: victim.name, cause, ...(validKill ? { ki: killer.id } : {}), vi: victim.id });
+    this.onKill?.(validKill ? killer.name : null, victim.name, cause, validKill ? killer.id : undefined, victim.id);
 
     if (validKill) {
       killer.money += MONEY_KILL;
@@ -1312,6 +1331,8 @@ export class Game implements ProjectileWorld {
   // ── Corpses ──────────────────────────────────────────────────────────────
 
   private addCorpse(w: Worm) {
+    this.texts.add(w.x, w.y - 40, 'K.O. !', '#ff5a4a', 10, 1300);
+    if (w.id === this.localId) this.cameraFx.addTrauma(0.6);
     this.particles.spawnGibs(w.x, w.y - 3);
     this.corpses.push({ x: w.x, y: w.y, vx: w.vx * 0.5, vy: Math.min(0, w.vy), facing: w.facing, color: w.color, born: performance.now() });
     if (this.corpses.length > 12) this.corpses.shift();
@@ -1372,13 +1393,68 @@ export class Game implements ProjectileWorld {
       }
       if (r >= 6) sound.playExplosion(r);
     }
-    if (r >= 15) {
+    // Camera shake and a flash of light, stronger when it's close to you
+    if (r >= 8) {
       const d = Math.hypot(x - this.camX, y - this.camY);
-      const intensity = r * 0.25 * Math.max(0, 1 - d / 300);
-      if (intensity > 0.5) {
-        this.shakeTime = 8;
-        this.shakeIntensity = intensity;
+      const near = Math.max(0, 1 - d / 280);
+      this.cameraFx.addTrauma(Math.min(0.7, r / 38) * near);
+      if (r >= 16 && near > 0.3) {
+        this.screenFlash.flash(Math.min(0.32, r / 90) * near, fiery || !color ? '255, 190, 120' : hexToRgbString(color));
       }
+    }
+  }
+
+  /**
+   * Floating numbers: damage (merged while a wizard keeps taking hits), heals, gold.
+   * Works the same for host and clients since it only watches the health values.
+   */
+  private updateNumbers() {
+    for (const w of this.worms) {
+      let t = this.hpTrack.get(w.id);
+      if (!t) {
+        t = { hp: w.health, dmg: 0, heal: 0, first: 0, last: 0 };
+        this.hpTrack.set(w.id, t);
+      }
+      const d = w.health - t.hp;
+      const wasDead = t.hp <= 0;
+      t.hp = w.health;
+      if (!w.isAlive() && !wasDead && d < 0) {
+        // Final blow: show it now
+        t.dmg += -d;
+        t.last = this.frame - 100;
+      } else if (wasDead) {
+        t.dmg = t.heal = 0; // respawn: not a heal
+        continue;
+      } else if (d < 0) {
+        if (t.dmg === 0) t.first = this.frame;
+        t.dmg += -d;
+        t.last = this.frame;
+        if (w.id === this.localId) this.cameraFx.addTrauma(Math.min(0.5, -d / 50));
+      } else if (d > 0) {
+        if (t.heal === 0) t.first = this.frame;
+        t.heal += d;
+        t.last = this.frame;
+      }
+      const quiet = this.frame - t.last > 8;
+      const long = this.frame - t.first > 40;
+      if (t.dmg > 0 && (quiet || long)) {
+        const big = t.dmg >= 45;
+        this.texts.add(w.x, w.y - 22, `-${t.dmg}`, damageColor(t.dmg), 6 + Math.min(6, t.dmg / 9), big ? 1100 : 850);
+        t.dmg = 0;
+        t.first = this.frame;
+      }
+      if (t.heal > 0 && (quiet || long)) {
+        if (t.heal >= 4) this.texts.add(w.x, w.y - 22, `+${t.heal}`, '#5dff8a', 6.5, 900);
+        t.heal = 0;
+      }
+    }
+    // Gold earned by the local player
+    const me = this.getLocalWorm();
+    if (me) {
+      if (this.lastLocalMoney >= 0 && me.money > this.lastLocalMoney && me.isAlive()) {
+        this.texts.add(me.x, me.y - 30, `+${me.money - this.lastLocalMoney} or`, '#ffd34d', 6.5, 1100);
+      }
+      this.lastLocalMoney = me.money;
     }
   }
 
@@ -1492,7 +1568,7 @@ export class Game implements ProjectileWorld {
         this.terrain.flood(ev.y, !!ev.w);
         break;
       case 'kill':
-        this.onKill?.(ev.killer, ev.victim, ev.cause);
+        this.onKill?.(ev.killer, ev.victim, ev.cause, ev.ki, ev.vi);
         break;
     }
   }
@@ -1673,8 +1749,9 @@ export class Game implements ProjectileWorld {
     this.lastRenderTime = now;
     const target = this.getLocalWorm();
     if (target && target.isAlive()) {
-      const tx = target.prevX + (target.x - target.prevX) * alpha;
-      const ty = target.prevY + (target.y - target.prevY) * alpha;
+      // Look a little ahead, where you aim
+      const tx = target.prevX + (target.x - target.prevX) * alpha + Math.cos(target.aimAngle) * 22;
+      const ty = target.prevY + (target.y - target.prevY) * alpha + Math.sin(target.aimAngle) * 14;
       if (!this.camFollowing) {
         this.camX = tx;
         this.camY = ty;
@@ -1705,12 +1782,11 @@ export class Game implements ProjectileWorld {
     const alpha = this.renderAlpha(now);
     this.updateCamera(now, alpha);
 
-    let sx = 0;
-    let sy = 0;
-    if (this.shakeTime > 0) {
-      sx = (Math.random() - 0.5) * this.shakeIntensity / 2;
-      sy = (Math.random() - 0.5) * this.shakeIntensity / 2;
-    }
+    const dt = Math.min(100, now - (this.lastFxTime || now));
+    this.lastFxTime = now;
+    const shake = this.cameraFx.offset(now, dt);
+    const sx = -shake.x;
+    const sy = -shake.y;
     if (this.smoothActive && !this.smoothTerrain) {
       // GPU context lost (driver reset…): fall back to the pixel renderer
       for (const gl of [this.glSolid, this.glLiquid]) if (gl) gl.canvas.style.display = 'none';
@@ -1752,12 +1828,41 @@ export class Game implements ProjectileWorld {
     }
     for (const c of this.gasClouds) c.draw(ctx, now);
     this.drawChannels(ctx, now);
+    this.spawnWormDust();
     this.particles.draw(ctx);
     for (const p of this.projectiles) p.draw(ctx, alpha, now);
     if (!smooth) this.terrain.drawLiquids(ctx, this.frame);
+    this.texts.draw(ctx, now);
     ctx.restore();
+    this.screenFlash.draw(ctx, cw, ch, dt);
 
     this.drawOffScreenIndicators();
+  }
+
+  /** Dust kicked up by the wizards: landings, jumps and footsteps */
+  private spawnWormDust() {
+    for (const e of WORM_FX) {
+      const dir = e.up ? 1 : -1; // away from the floor
+      const mat = this.terrain.materialAt(e.x, e.y - dir * 1.5);
+      const color = mat === CONFIG.MAT_SAND ? '#d9bf86' : mat === CONFIG.MAT_ICE ? '#dff2ff' : mat === CONFIG.MAT_ROCK ? '#9a98a0' : '#a8927a';
+      if (e.type === 'step') {
+        this.particles.spawn(e.x, e.y + dir, (Math.random() - 0.5) * 0.4, dir * 0.15, 'smoke', color, 3 + Math.random() * 2, 18);
+        continue;
+      }
+      const n = e.type === 'land' ? Math.min(10, 3 + Math.round(e.power * 1.5)) : 4;
+      for (let i = 0; i < n; i++) {
+        const side = i % 2 === 0 ? -1 : 1;
+        const sp = 0.3 + Math.random() * (e.type === 'land' ? 0.25 * e.power : 0.5);
+        this.particles.spawn(e.x + side * 2, e.y + dir, side * sp, dir * Math.random() * 0.3, 'smoke', color, 4 + Math.random() * 3, 22 + Math.floor(Math.random() * 10));
+      }
+      if (e.type === 'land' && e.power > 3) {
+        for (let i = 0; i < 4; i++) {
+          this.particles.spawn(e.x, e.y + dir, (Math.random() - 0.5) * 2, dir * (0.8 + Math.random()), 'dirt', color, 1, 25);
+        }
+        if (e.power > 4.5) this.cameraFx.addTrauma(0.15);
+      }
+    }
+    WORM_FX.length = 0;
   }
 
   /** Portals: a swirling ring per portal, cyan for the 1st and orange for the 2nd of each caster */

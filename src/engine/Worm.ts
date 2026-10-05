@@ -26,6 +26,10 @@ export interface WormFx {
   playSounds: boolean;
 }
 
+/** Visual events produced while drawing the wizards (dust when landing, jumping, running) — consumed by Game */
+export interface WormFxEvent { type: 'land' | 'jump' | 'step'; x: number; y: number; power: number; up: boolean }
+export const WORM_FX: WormFxEvent[] = [];
+
 export const EMPTY_INPUT: WormInput = {
   left: false, right: false, up: false, down: false, jump: false, fire: false, rope: false
 };
@@ -106,6 +110,10 @@ export class Worm {
   private idlePhase = 0;
   private lastDrawAt = 0;
   private pose: { anim: WizardAnim; frame: number } = { anim: 'idle', frame: 0 };
+  // Squash & stretch (rendering): < 0 squashed (landing), > 0 stretched (take-off)
+  private squash = 0;
+  private wasOnGround = true;
+  private airFall = 0;
 
   public weapon: WeaponDef = WEAPON_REGISTRY[DEFAULT_WEAPON];
   /** Ticks before the next cast */
@@ -554,7 +562,22 @@ export class Worm {
     const sinceCast = now - this.castAt;
     const speed = Math.abs(this.x - this.prevX);
     const onGround = this.grounded || (this.upsideDown ? this.blockedUp(terrain, this.x, this.y - 1.5) : this.blockedDown(terrain, this.x, this.y + 1.5));
+    // Squash on landing, stretch on take-off, dust under the feet
+    const fall = (this.y - this.prevY) * (this.upsideDown ? -1 : 1); // > 0 = towards the floor
+    const feetY = this.y + (this.upsideDown ? -WIZARD_FOOT : WIZARD_FOOT);
+    if (onGround && !this.wasOnGround && this.airFall > 1.3) {
+      this.squash = -Math.min(0.34, this.airFall * 0.075);
+      WORM_FX.push({ type: 'land', x: this.x, y: feetY, power: this.airFall, up: this.upsideDown });
+    } else if (!onGround && this.wasOnGround && fall < -1.2) {
+      this.squash = 0.2;
+      WORM_FX.push({ type: 'jump', x: this.x, y: feetY, power: -fall, up: this.upsideDown });
+    }
+    this.airFall = onGround ? 0 : Math.max(this.airFall, fall);
+    this.wasOnGround = onGround;
+    this.squash *= Math.exp(-dt / 75);
+
     const pose = this.pose;
+    const prevFrame = pose.frame;
     if (now - this.shockedAt < 150) {
       // Electrocuted: convulsions
       pose.anim = 'damage';
@@ -577,6 +600,9 @@ export class Worm {
       this.runPhase += dt * (0.004 + Math.min(speed, 2) * 0.008);
       pose.anim = 'run';
       pose.frame = Math.floor(this.runPhase) % 13;
+      if (pose.frame !== prevFrame && (pose.frame === 3 || pose.frame === 9)) {
+        WORM_FX.push({ type: 'step', x: this.x, y: feetY, power: speed, up: this.upsideDown });
+      }
     } else {
       this.idlePhase += dt * 0.011;
       pose.anim = 'idle';
@@ -644,11 +670,23 @@ export class Worm {
         ctx.rotate(Math.sin(now * 0.005) * 0.16);
         ctx.translate(-wx, -footY);
       }
+      if (Math.abs(this.squash) > 0.01) {
+        // Squash & stretch around the feet
+        ctx.translate(wx, footY);
+        ctx.scale(1 - this.squash * 0.6, 1 + this.squash);
+        ctx.translate(-wx, -footY);
+      }
       if (!drawWizard(ctx, frozen ? FROZEN_ROBE : this.color, this.pose.anim, this.pose.frame, wx, footY, f, WIZARD_HEIGHT)) {
         ctx.fillStyle = this.color; // sprites still loading
         ctx.beginPath();
         ctx.ellipse(px, py - 3, 4.5, 8.5, 0, 0, Math.PI * 2);
         ctx.fill();
+      } else if (now - this.hurtAt < 100) {
+        // Hit flash: the sprite glows white for a few frames
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha *= 0.75 * (1 - (now - this.hurtAt) / 100);
+        drawWizard(ctx, frozen ? FROZEN_ROBE : this.color, this.pose.anim, this.pose.frame, wx, footY, f, WIZARD_HEIGHT);
+        drawWizard(ctx, frozen ? FROZEN_ROBE : this.color, this.pose.anim, this.pose.frame, wx, footY, f, WIZARD_HEIGHT);
       }
       ctx.restore();
     }

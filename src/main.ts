@@ -70,7 +70,8 @@ window.addEventListener('DOMContentLoaded', () => {
     shop.show(worm, (weaponId) => game.chooseWeapon(weaponId), game.rules.freeSpells);
   };
 
-  game.onKill = (killer, victim, cause) => hud.showKill(killer, victim, cause);
+  game.onKill = (killer, victim, cause, killerId, victimId) =>
+    hud.showKill(killer, victim, cause, killerId === game.localId, victimId === game.localId);
 
   game.onMatchOver = (result) => {
     shop.hide();

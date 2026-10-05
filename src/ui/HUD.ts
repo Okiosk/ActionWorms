@@ -28,12 +28,22 @@ export class HUD {
   private windEl: HTMLElement;
   private lastScoreHtml = '';
   private lastMutKey = '';
+  private vignette!: HTMLElement;
+  private hitFlash!: HTMLElement;
+  private announce!: HTMLElement;
+  private lastHp = -1;
+  private lastMoney = -1;
+  private lastCooldown = 0;
+  private streak: number[] = [];
 
   constructor(container: HTMLElement) {
     this.root = container;
     const hud = document.createElement('div');
     hud.className = 'hud';
     hud.innerHTML = `
+      <div class="hud-vignette" id="hud-vignette"></div>
+      <div class="hud-hitflash" id="hud-hitflash"></div>
+      <div class="hud-announce" id="hud-announce"></div>
       <div class="hud-tools">
         <button class="hud-box icon-btn" id="hud-mute" title="Son (M)">🔊</button>
         <button class="hud-box icon-btn" id="hud-fs" title="Plein écran (F11)">⛶</button>
@@ -77,6 +87,9 @@ export class HUD {
     this.money = q('#hud-money');
     this.net = q('#hud-net');
     this.mutators = q('#hud-mutators');
+    this.vignette = q('#hud-vignette');
+    this.hitFlash = q('#hud-hitflash');
+    this.announce = q('#hud-announce');
     this.windEl = q('#hud-wind');
 
     const muteBtn = q('#hud-mute');
@@ -102,7 +115,31 @@ export class HUD {
     this.killfeed.innerHTML = '';
   }
 
-  public showKill(killer: string | null, victim: string, cause?: KillCause) {
+  /** Restarts a CSS animation class on an element */
+  private bump(el: HTMLElement, cls: string) {
+    el.classList.remove(cls);
+    void el.offsetWidth; // reflow so the animation plays again
+    el.classList.add(cls);
+  }
+
+  /** Big centred text: kill streaks, being knocked out */
+  private shout(text: string, kind: 'kill' | 'streak' | 'dead') {
+    this.announce.textContent = text;
+    this.announce.className = `hud-announce ${kind}`;
+    this.bump(this.announce, 'show');
+  }
+
+  public showKill(killer: string | null, victim: string, cause?: KillCause, byMe = false, onMe = false) {
+    if (byMe) {
+      const now = performance.now();
+      this.streak = this.streak.filter(t => now - t < 4500);
+      this.streak.push(now);
+      const n = this.streak.length;
+      const words = ['', 'Éliminé !', 'Double élimination !', 'Triple élimination !', 'Carnage !', 'Inarrêtable !'];
+      this.shout(words[Math.min(n, words.length - 1)], n > 1 ? 'streak' : 'kill');
+    } else if (onMe) {
+      this.shout(killer ? `Éliminé par ${killer}` : 'K.O.', 'dead');
+    }
     const line = document.createElement('div');
     line.className = 'kill';
     if (killer) line.innerHTML = `<b>${esc(killer)}</b> ✦ ${esc(victim)}`;
@@ -170,8 +207,20 @@ export class HUD {
 
     // Local wizard
     this.status.style.display = local && local.isAlive() ? '' : 'none';
-    if (!local || !local.isAlive()) return;
+    if (!local || !local.isAlive()) {
+      this.lastHp = -1;
+      this.vignette.classList.remove('low');
+      return;
+    }
     const pct = Math.max(0, Math.min(100, (local.health / local.maxHealth) * 100));
+    // Hurt: red flash on the screen edges + shaking health bar; low health: pulsing vignette
+    if (this.lastHp >= 0 && local.health < this.lastHp - 1) {
+      this.hitFlash.style.setProperty('--hit', String(Math.min(1, 0.35 + (this.lastHp - local.health) / 40)));
+      this.bump(this.hitFlash, 'on');
+      this.bump(this.status, 'shake');
+    }
+    this.lastHp = local.health;
+    this.vignette.classList.toggle('low', pct < 30);
     this.hpFill.style.width = `${pct}%`;
     this.hpFill.className = pct < 30 ? 'crit' : pct < 60 ? 'warn' : '';
     this.hpVal.textContent = String(Math.ceil(local.health));
@@ -193,5 +242,13 @@ export class HUD {
       this.reloadFill.style.width = ready ? '100%' : `${100 - (local.shotCooldown / total) * 100}%`;
     }
     this.money.textContent = game.rules.freeSpells ? '✨ Grimoire ouvert' : `✨ ${local.money} or`;
+    if (this.lastMoney >= 0 && local.money > this.lastMoney) this.bump(this.money, 'pop');
+    this.lastMoney = local.money;
+    // Spell ready again after a long cooldown: the icon pulses
+    this.lastCooldown = Math.max(this.lastCooldown, local.shotCooldown);
+    if (local.shotCooldown <= 0) {
+      if (this.lastCooldown > 30) this.bump(this.weaponIcon, 'ready');
+      this.lastCooldown = 0;
+    }
   }
 }
