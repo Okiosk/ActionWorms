@@ -1,5 +1,5 @@
 import { CONFIG } from '../config';
-import { WeaponDef, WeaponId } from '../weapons/WeaponDef';
+import { WeaponDef, WeaponId, StatusEffect } from '../weapons/WeaponDef';
 import { WEAPON_REGISTRY, DEFAULT_WEAPON, MONEY_START } from '../weapons/WeaponRegistry';
 import { Terrain } from './Terrain';
 import { NinjaRope } from './NinjaRope';
@@ -68,6 +68,14 @@ export class Worm {
   public shieldTimer: number = 0;     // Égide Miroir: reflects enemy spells
   public burnTimer: number = 0;       // Souffle du Dragon: damage over time
   public burnBy: string = '';         // who set us on fire (kill credit)
+  // Curses (ticks left) — synced by the host, also used by the client prediction
+  public sheepTimer: number = 0;      // Métamorphose: a sheep, no spells, no rope
+  public bubbleTimer: number = 0;     // Bulle: floats up, helpless
+  public drunkTimer: number = 0;      // Ivresse: left/right swapped, wobbly aim
+  /** Mains Foudroyantes: > 0 while the caster keeps the arcs going */
+  public channelTimer: number = 0;
+  /** Last time electric arcs hit this wizard (rendering) */
+  public shockedAt = -1e9;
   /** Dead and choosing a spell in the grimoire — do not respawn automatically */
   public waitingForShop: boolean = true;
   private regenAccum: number = 0;
@@ -85,9 +93,8 @@ export class Worm {
   private pose: { anim: WizardAnim; frame: number } = { anim: 'idle', frame: 0 };
 
   public weapon: WeaponDef = WEAPON_REGISTRY[DEFAULT_WEAPON];
+  /** Ticks before the next cast */
   public shotCooldown: number = 0;
-  public clipAmmo: number = 0;
-  public clipReloadCooldown: number = 0;
 
   constructor(id: string, name: string, color: string) {
     this.id = id;
@@ -97,7 +104,7 @@ export class Worm {
 
   public setWeapon(id: WeaponId) {
     this.weapon = WEAPON_REGISTRY[id] || WEAPON_REGISTRY[DEFAULT_WEAPON];
-    this.resetAmmo();
+    this.shotCooldown = 0;
   }
 
   public applyModifiers(mods: MatchModifiers) {
@@ -105,12 +112,6 @@ export class Worm {
     this.maxHealth = mods.maxHealth;
     this.health = Math.min(this.health, this.maxHealth);
     this.rope.setReach(mods.ropeReach);
-  }
-
-  public resetAmmo() {
-    this.clipAmmo = this.weapon.clipSize;
-    this.shotCooldown = 0;
-    this.clipReloadCooldown = 0;
   }
 
   public spawn(x: number, y: number) {
@@ -122,15 +123,31 @@ export class Worm {
     this.freezeTimer = 0;
     this.shieldTimer = 0;
     this.burnTimer = 0;
+    this.clearCurses();
+    this.channelTimer = 0;
     this.waitingForShop = false;
     this.rope.release();
-    this.resetAmmo();
+    this.shotCooldown = 0;
   }
 
   /** Staff swing animation (called whenever a spell is cast, on every machine) */
   public onCast() {
     const now = performance.now();
     if (now - this.castAt > 150) this.castAt = now;
+  }
+
+  public clearCurses() {
+    this.sheepTimer = 0;
+    this.bubbleTimer = 0;
+    this.drunkTimer = 0;
+  }
+
+  /** Lasting curse from a spell (the longest one wins). */
+  public curse(status: StatusEffect, ticks: number) {
+    if (status === 'sheep') this.sheepTimer = Math.max(this.sheepTimer, ticks);
+    else if (status === 'bubble') this.bubbleTimer = Math.max(this.bubbleTimer, ticks);
+    else this.drunkTimer = Math.max(this.drunkTimer, ticks);
+    if (status !== 'drunk') this.rope.release();
   }
 
   public isAlive(): boolean {
@@ -147,6 +164,7 @@ export class Worm {
     this.health = Math.max(0, this.health - amount);
     this.vx += knockX;
     this.vy += knockY;
+    if (amount >= 5) this.bubbleTimer = 0; // a real hit pops the bubble
     if (this.health <= 0) this.rope.release();
   }
 
@@ -166,9 +184,7 @@ export class Worm {
 
     if (fx) {
       if (this.shotCooldown > 0) this.shotCooldown--;
-      if (this.clipReloadCooldown > 0 && --this.clipReloadCooldown === 0) {
-        this.clipAmmo = this.weapon.clipSize;
-      }
+      if (this.channelTimer > 0) this.channelTimer--;
     }
 
     const frozen = this.freezeTimer > 0;
@@ -196,6 +212,9 @@ export class Worm {
     // Liquids: strong buoyancy, the wizard sinks slowly
     const g = CONFIG.GRAVITY * this.modifiers.gravity * (inFluid ? 0.2 : 1);
 
+    if (this.sheepTimer > 0) this.sheepTimer--;
+    if (this.drunkTimer > 0) this.drunkTimer--;
+
     // Frozen: no control at all, just fall and slide to a stop
     if (this.freezeTimer > 0) {
       this.freezeTimer--;
@@ -210,14 +229,30 @@ export class Worm {
     }
 
     if (input.aimAngle !== undefined) {
-      this.aimAngle = input.aimAngle;
+      // Drunk: the aim sways around the mouse
+      this.aimAngle = input.aimAngle + (this.drunkTimer > 0 ? Math.sin(this.drunkTimer * 0.09) * 0.5 : 0);
       this.facing = Math.cos(this.aimAngle) >= 0 ? 1 : -1;
     }
 
     const playSounds = !!fx?.playSounds;
 
+    // Bubble: floats up slowly, barely steerable, pops against the ceiling
+    if (this.bubbleTimer > 0) {
+      this.bubbleTimer--;
+      if (this.rope.state !== 'idle') this.rope.release();
+      this.ropeHeld = input.rope;
+      const drift = (input.left ? -1 : 0) + (input.right ? 1 : 0);
+      this.vx = (this.vx + drift * 0.03) * 0.97;
+      this.vy = Math.max(-0.7, Math.min(this.vy * 0.95, 1) - 0.045);
+      if (this.blockedUp(terrain, this.x, this.y - 1.5)) this.bubbleTimer = 0;
+      this.grounded = false;
+      this.resolvePhysics(terrain);
+      return;
+    }
+    const sheep = this.sheepTimer > 0;
+
     // Rope: fires on press (pressing again while attached re-fires), releases on button up
-    if (input.rope && !this.ropeHeld) {
+    if (input.rope && !this.ropeHeld && !sheep) {
       this.rope.shoot(this.x, this.y, this.aimAngle, playSounds);
     } else if (!input.rope && this.rope.state !== 'idle') {
       this.rope.release();
@@ -226,8 +261,9 @@ export class Worm {
 
     const attached = this.rope.isAttached();
     const speedMod = this.modifiers.wormSpeed;
-    const walk = CONFIG.WORM_WALK_SPEED * speedMod;
-    const moveDir = (input.left ? -1 : 0) + (input.right ? 1 : 0);
+    const walk = CONFIG.WORM_WALK_SPEED * speedMod * (sheep ? 1.35 : 1);
+    // Drunk: left and right are swapped
+    const moveDir = ((input.left ? -1 : 0) + (input.right ? 1 : 0)) * (this.drunkTimer > 0 ? -1 : 1);
 
     // Giant mushroom: trampoline (jump on it to go even higher)
     if (groundMat === CONFIG.MAT_BOUNCE && !attached && this.vy >= 0) {
@@ -280,7 +316,7 @@ export class Worm {
     }
 
     if (input.jump && this.grounded && !attached) {
-      this.vy = -CONFIG.WORM_JUMP_FORCE;
+      this.vy = -CONFIG.WORM_JUMP_FORCE * (sheep ? 1.3 : 1);
       this.grounded = false;
     }
 
@@ -336,23 +372,11 @@ export class Worm {
     }
   }
 
+  /** A cast, then a short cooldown. A sheep cannot cast. */
   private attemptFire(onShoot: (worm: Worm, weapon: WeaponDef, angle: number) => void) {
-    if (this.shotCooldown > 0 || this.clipReloadCooldown > 0) return;
-    const weapon = this.weapon;
-
-    if (!this.modifiers.unlimitedAmmo) {
-      if (this.clipAmmo <= 0) {
-        this.clipReloadCooldown = weapon.clipReloadTime;
-        return;
-      }
-      this.clipAmmo--;
-    }
-    this.shotCooldown = weapon.reloadTime;
-    onShoot(this, weapon, this.aimAngle);
-
-    if (!this.modifiers.unlimitedAmmo && this.clipAmmo <= 0) {
-      this.clipReloadCooldown = weapon.clipReloadTime;
-    }
+    if (this.shotCooldown > 0 || this.sheepTimer > 0) return;
+    this.shotCooldown = this.weapon.cooldown;
+    onShoot(this, this.weapon, this.aimAngle);
   }
 
   // ════════════════════════════════════════════════════════════════════════
@@ -494,7 +518,15 @@ export class Worm {
     const speed = Math.abs(this.x - this.prevX);
     const onGround = this.grounded || this.blockedDown(terrain, this.x, this.y + 1.5);
     const pose = this.pose;
-    if (sinceHurt < 260) {
+    if (now - this.shockedAt < 150) {
+      // Electrocuted: convulsions
+      pose.anim = 'damage';
+      pose.frame = Math.floor(now / 45) % 7;
+    } else if (this.channelTimer > 0) {
+      // Casting the arcs: staff thrust forward
+      pose.anim = 'attack';
+      pose.frame = 5;
+    } else if (sinceHurt < 260) {
       pose.anim = 'damage';
       pose.frame = Math.floor((sinceHurt / 260) * 7);
     } else if (sinceCast < 250) {
@@ -533,13 +565,28 @@ export class Worm {
 
     this.rope.draw(ctx, px, py);
 
-    // Wizard
+    // Wizard (or sheep)
     const footY = py + WIZARD_FOOT;
-    if (!drawWizard(ctx, frozen ? FROZEN_ROBE : this.color, this.pose.anim, this.pose.frame, px, footY, f, WIZARD_HEIGHT)) {
-      ctx.fillStyle = this.color; // sprites still loading
-      ctx.beginPath();
-      ctx.ellipse(px, py - 3, 4.5, 8.5, 0, 0, Math.PI * 2);
-      ctx.fill();
+    const shocked = now - this.shockedAt < 150;
+    const wx = px + (shocked ? (Math.random() - 0.5) * 1.4 : 0);
+    const sheep = this.sheepTimer > 0;
+    if (sheep) {
+      this.drawSheep(ctx, wx, footY, f, now);
+    } else {
+      ctx.save();
+      if (this.drunkTimer > 0) {
+        // Drunk: sways around his feet
+        ctx.translate(wx, footY);
+        ctx.rotate(Math.sin(now * 0.005) * 0.16);
+        ctx.translate(-wx, -footY);
+      }
+      if (!drawWizard(ctx, frozen ? FROZEN_ROBE : this.color, this.pose.anim, this.pose.frame, wx, footY, f, WIZARD_HEIGHT)) {
+        ctx.fillStyle = this.color; // sprites still loading
+        ctx.beginPath();
+        ctx.ellipse(px, py - 3, 4.5, 8.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
     }
     if (frozen) {
       // Encased in ice
@@ -560,12 +607,36 @@ export class Worm {
     ctx.globalCompositeOperation = 'lighter';
 
     // Spell focus: a glowing orb floating in the aim direction (bigger right after casting)
-    const casting = this.shotCooldown > 0 || now - this.castAt < 200;
-    const ox = px + f * 1.5 + aimCos * 9;
-    const oy = py - 5 + aimSin * 9;
-    const pulse = 0.85 + 0.15 * Math.sin(now * 0.008);
-    drawFx(ctx, 'circle_05', ox, oy, (casting ? 15 : 10) * pulse, spellColor, 0.9);
-    drawFx(ctx, 'star_04', ox, oy, casting ? 11 : 7, '#ffffff', 0.9, now * 0.002);
+    if (!sheep) {
+      const casting = this.shotCooldown > 0 || now - this.castAt < 200;
+      const ox = px + f * 1.5 + aimCos * 9;
+      const oy = py - 5 + aimSin * 9;
+      const pulse = 0.85 + 0.15 * Math.sin(now * 0.008);
+      drawFx(ctx, 'circle_05', ox, oy, (casting ? 15 : 10) * pulse, spellColor, 0.9);
+      drawFx(ctx, 'star_04', ox, oy, casting ? 11 : 7, '#ffffff', 0.9, now * 0.002);
+    }
+
+    // Electrocuted: blue glow
+    if (shocked) {
+      drawFx(ctx, 'circle_05', px, py - 4, 26, '#6fa8ff', 0.55 + Math.random() * 0.3);
+      drawFx(ctx, Math.random() < 0.5 ? 'spark_01' : 'spark_02', px, py - 4, 22, '#dff0ff', 0.8, Math.random() * 6.3);
+    }
+
+    // Drunk: little stars spinning around the head
+    if (this.drunkTimer > 0) {
+      for (let k = 0; k < 3; k++) {
+        const a = now * 0.005 + (k * Math.PI * 2) / 3;
+        drawFx(ctx, 'star_04', px + Math.cos(a) * 6, footY - (sheep ? 12 : WIZARD_HEIGHT) - 1 + Math.sin(a) * 1.8, 6, '#ffe36b', 0.95, a);
+      }
+    }
+
+    // Bubble: soap bubble around the wizard
+    if (this.bubbleTimer > 0) {
+      const wob = Math.sin(now * 0.01) * 0.8;
+      drawFx(ctx, 'light_01', px, py - 4, 30 + wob, '#bfe8ff', 0.35, now * 0.0008);
+      drawFx(ctx, 'circle_02', px, py - 4, 29 - wob, '#e6f7ff', 0.7);
+      drawFx(ctx, 'circle_05', px - 5, py - 11, 5, '#ffffff', 0.8);
+    }
 
     // Mirror shield bubble
     if (this.shieldTimer > 0) {
@@ -597,7 +668,7 @@ export class Worm {
 
     // Health bar
     const barWidth = 20;
-    const barY = footY - WIZARD_HEIGHT - 5;
+    const barY = footY - (sheep ? 12 : WIZARD_HEIGHT) - 5;
     const hpRatio = Math.max(0, Math.min(1, this.health / this.maxHealth));
     ctx.fillStyle = 'rgba(15, 10, 8, 0.75)';
     ctx.fillRect(px - barWidth / 2 - 0.75, barY - 0.75, barWidth + 1.5, 3.5);
@@ -612,5 +683,53 @@ export class Worm {
     ctx.strokeText(this.name, px, barY - 2);
     ctx.fillStyle = '#ffecb3';
     ctx.fillText(this.name, px, barY - 2);
+  }
+
+  /** A fluffy sheep (with a ribbon in the player's colour) standing on (x, footY). */
+  private drawSheep(ctx: CanvasRenderingContext2D, x: number, footY: number, f: number, now: number) {
+    const moving = Math.abs(this.x - this.prevX) > 0.12;
+    const step = moving ? Math.sin(now * 0.025) : 0;
+    const by = footY - 5.5 - (moving ? Math.abs(step) * 0.8 : 0);
+    ctx.save();
+    // Legs
+    ctx.strokeStyle = '#2b2420';
+    ctx.lineWidth = 1.1;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (const [lx, ph] of [[-3, 1], [-1.5, -1], [2, -1], [3.5, 1]] as const) {
+      ctx.moveTo(x + lx * f, by + 2);
+      ctx.lineTo(x + lx * f + step * ph * 1.2 * f, footY);
+    }
+    ctx.stroke();
+    // Wool
+    ctx.fillStyle = '#f6f2e8';
+    ctx.strokeStyle = '#cfc7b6';
+    ctx.lineWidth = 0.5;
+    for (const [cx, cy, r] of [[-3.5, 0.5, 2.6], [-0.5, 1, 2.8], [2.5, 0.5, 2.6], [-2.5, -2, 2.7], [0.8, -2.3, 2.9], [3.2, -1.2, 2.3]] as const) {
+      ctx.beginPath();
+      ctx.arc(x + cx * f, by + cy, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    // Head, ear and eye
+    const hx = x + 5.6 * f;
+    const hy = by - 2.2 + (moving ? step * 0.4 : Math.sin(now * 0.004) * 0.3);
+    ctx.fillStyle = '#2b2420';
+    ctx.beginPath();
+    ctx.ellipse(hx, hy, 2.3, 1.8, f * 0.35, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(hx - 1.4 * f, hy - 1.5, 1.2, 0.6, -f * 0.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(hx + 0.6 * f, hy - 0.5, 0.55, 0, Math.PI * 2);
+    ctx.fill();
+    // Ribbon in the player's colour
+    ctx.fillStyle = this.color;
+    ctx.beginPath();
+    ctx.ellipse(x + 4 * f, by - 0.5, 0.9, 1.9, f * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 }

@@ -29,7 +29,6 @@ const ADVANCED: Setting[] = [
   { key: 'damageScale', label: 'Dégâts', options: [[1, '×1'], [0.5, '×0,5'], [2, '×2'], [3, '×3']] },
   { key: 'explosionScale', label: 'Taille des explosions', options: [[1, '×1'], [0.5, '×0,5'], [2, '×2']] },
   { key: 'regenRate', label: 'Régénération', options: [[0, 'Aucune'], [1, '1 PV/s'], [3, '3 PV/s']] },
-  { key: 'unlimitedAmmo', label: 'Munitions', options: [[false, 'Normales'], [true, 'Illimitées']] },
   { key: 'noSelfDamage', label: 'Auto-dégâts', options: [[false, 'Oui'], [true, 'Non']] },
   { key: 'acidEnabled', label: 'Acide et lave', options: [[true, 'Oui'], [false, 'Non']] }
 ];

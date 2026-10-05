@@ -26,7 +26,7 @@ Aucun serveur de jeu : l'hôte simule la partie et l'envoie aux autres joueurs 6
 
 - **Mêlée** (chacun pour soi), **Équipes** (Rouge contre Bleu, pas de tir ami) ou **Colline** (rester seul dans la zone centrale).
 - 6 cartes générées avec aperçu exact dans le salon (bouton « Autre carte » pour une variante).
-- Options avancées : gravité, portée du grappin, vitesse, points de vie, dégâts, taille des explosions, régénération, munitions illimitées, auto-dégâts, acide et lave.
+- Options avancées : gravité, portée du grappin, vitesse, points de vie, dégâts, taille des explosions, régénération, auto-dégâts, acide et lave.
 
 ## Cartes
 
@@ -67,27 +67,29 @@ Les auteurs et licences des images sont listés dans [CREDITS.md](CREDITS.md).
 
 ## Sorts
 
-19 sorts, chacun avec un effet unique. On gagne de l'or en éliminant des sorciers (+75) et en mourant (+25).
+21 sorts, chacun avec un effet unique. Pas de munitions ni de rechargement : chaque sort a seulement un court délai entre deux lancers. On gagne de l'or en éliminant des sorciers (+75) et en mourant (+25).
 
 | Sort | Effet |
 |---|---|
-| 🔥 Boule de Feu (gratuit) | Projectile explosif polyvalent |
-| ✨ Éclats Arcaniques (gratuit) | Rafale rapide de petits cristaux |
-| ⚡ Choc d'Étincelles (gratuit) | 8 étincelles en éventail, à bout portant |
-| 🔮 Orbe du Chaos | Rebondit puis explose après 2 s |
-| 🐉 Souffle du Dragon | Flammes qui montent et **enflamment** la cible (dégâts sur 3 s) |
-| 🪃 Chakram Envoûté | Revient vers son lanceur, touche à l'aller et au retour |
+| 🔥 Boule de Feu (gratuit) | Projectile explosif polyvalent, brûle le bois |
+| 🐸 Crapauds Kamikazes (gratuit) | 3 crapauds qui sautillent vers l'ennemi le plus proche et explosent à son contact |
+| 🪃 Chakram Envoûté (gratuit) | Revient vers son lanceur, touche à l'aller et au retour |
+| 🐉 Souffle du Dragon | Flammes continues qui **enflamment** la cible (dégâts sur 3 s) |
 | 🧱 Rempart Tellurique | **Crée de la terre** : bouche un tunnel, construit un abri |
+| 🔀 Permutation | Si l'orbe touche un sorcier, vous **échangez vos places** |
 | 🪨 Rune Piégée | Piège collé au sol, explose à l'approche |
+| 🍺 Philtre d'Ivresse | 6 s de **commandes gauche/droite inversées** et de visée qui tangue |
+| 🫧 Bulle Farceuse | La cible s'envole dans une **bulle** pendant 3 s (elle éclate au plafond ou si on la touche) |
 | 🩸 Sangsue Écarlate | **Soigne** le lanceur des dégâts infligés |
 | 🌀 Translocation | **Téléporte** le lanceur là où l'orbe s'arrête |
 | ⭐ Comète Étoilée | Se divise en 6 éclats explosifs |
-| 🧪 Fiole d'Alchimiste | Laisse une **mare d'acide** permanente |
+| 🐑 Métamorphose Ovine | Transforme la cible en **mouton** 6 s : ni sort ni grappin, juste des bonds et des bêlements |
+| ☠️ Fiole Pestilentielle | Libère un **nuage toxique** qui se répand dans les galeries, empoisonne puis se dissipe (7 s) |
 | 👻 Feu Follet Traqueur | Poursuit l'ennemi le plus proche |
 | ❄️ Orbe de Givre | **Gèle** les sorciers proches 3 s |
-| 🛡️ Égide Miroir | Bouclier de 2,5 s qui **renvoie** les sorts ennemis |
-| 🌩️ Arc Foudroyant | Éclair qui **rebondit** sur jusqu'à 3 sorciers |
-| ☄️ Pluie de Météores | Marque une cible, des **météores tombent du plafond** |
+| 🛡️ Égide Miroir | Bouclier de 2,5 s qui **renvoie** les sorts ennemis… et les éclairs |
+| ⚡ Mains Foudroyantes | Maintenir le clic : **arcs électriques** continus qui électrocutent et soulèvent les sorciers devant soi |
+| ☄️ Pluie de Météores | Marque une cible, des **météores tombent du ciel** |
 | 🔱 Foudre Divine | Rayon qui traverse terre et roche |
 | 🕳️ Singularité du Néant | Trou noir qui **aspire** les ennemis |
 
@@ -107,6 +109,7 @@ Ouvre l'URL locale dans plusieurs onglets pour tester le multijoueur. Le déploi
 - `src/engine/Worm.ts`, `NinjaRope.ts`, `Projectile.ts` — physique du sorcier, du grappin et des sorts
 - `src/engine/Sprites.ts` — sprites peints : sorcier animé (recoloré par joueur), particules, icônes
 - `src/engine/Particles.ts` — particules : sang, fumée, flammes, étincelles, explosions
+- `src/engine/GasCloud.ts`, `ForceLightning.ts` — nuage toxique et arcs électriques
 - `src/engine/Terrain.ts` — terrain destructible multi-matériaux (et rendu pixel de secours)
 - `src/engine/TerrainGL.ts` — rendu lisse du terrain en WebGL2 (shader)
 - `src/engine/MapGenerator.ts` — génération des 6 cartes

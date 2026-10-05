@@ -3,6 +3,8 @@ import { Terrain } from './Terrain';
 import { TerrainGL } from './TerrainGL';
 import { Worm, WormInput, EMPTY_INPUT, WormFx, WIZARD_FOOT, WIZARD_HEIGHT, FROZEN_ROBE } from './Worm';
 import { drawWizard, animFrames, prepareWizards } from './Sprites';
+import { GasCloud } from './GasCloud';
+import { computeLightning, drawLightning } from './ForceLightning';
 import { Projectile, ProjectileWorld } from './Projectile';
 import { ParticleManager } from './Particles';
 import { sound } from './SoundEffects';
@@ -80,9 +82,13 @@ export class Game implements ProjectileWorld {
   private frame = 0;
   private shakeTime = 0;
   private shakeIntensity = 0;
-  private zaps: { pts: number[]; life: number }[] = [];
   /** Fallen wizards playing their death animation (purely visual) */
   private corpses: Corpse[] = [];
+  /** Toxic clouds of the Fiole Pestilentielle (host and clients) */
+  private gasClouds: GasCloud[] = [];
+  /** Curse state seen at the previous tick, to play the transformation effects once */
+  private curseSeen = new Map<string, { sheep: boolean; bubble: boolean; drunk: boolean }>();
+  private lastCrackle = 0;
   /** Smooth WebGL terrain layers, stacked under and over the 2D canvas (null → pixel 2D renderer) */
   private glSolid: TerrainGL | null = null;
   private glLiquid: TerrainGL | null = null;
@@ -287,6 +293,8 @@ export class Game implements ProjectileWorld {
     this.terrain.generateMap(m.mapSeed, m.mapType, m.acidEnabled, m.gameMode === 'koth' ? CONFIG.KOTH_ZONE_RADIUS : 0);
     this.particles.clear();
     this.corpses = [];
+    this.gasClouds = [];
+    this.curseSeen.clear();
     this.projectiles = [];
     this.pendingEvents = [];
     this.pendingStates = [];
@@ -505,10 +513,9 @@ export class Game implements ProjectileWorld {
         }
       }
     }
-    for (let i = this.zaps.length - 1; i >= 0; i--) {
-      if (--this.zaps[i].life <= 0) this.zaps.splice(i, 1);
-    }
     this.updateCorpses();
+    this.updateGas();
+    this.curseEffects();
     this.particles.update(this.terrain);
   }
 
@@ -632,6 +639,11 @@ export class Game implements ProjectileWorld {
   }
 
   private hostShoot(worm: Worm, weapon: WeaponDef, angle: number) {
+    if (weapon.channel) {
+      this.lightningTick(worm, weapon);
+      this.castFX(worm, weapon, angle);
+      return; // the arcs are drawn from the synced "channelling" flag, no event needed
+    }
     if (weapon.shieldDuration) {
       worm.shieldTimer = weapon.shieldDuration;
       this.castFX(worm, weapon, angle);
@@ -652,6 +664,10 @@ export class Game implements ProjectileWorld {
 
   /** Casting sound + staff sparkle */
   private castFX(worm: Worm, weapon: WeaponDef, angle: number) {
+    if (weapon.channel) {
+      worm.channelTimer = 6;
+      return; // crackling sound and arcs are handled while rendering
+    }
     sound.playSpellForWeapon(weapon.id);
     worm.onCast();
     const c = Math.cos(angle);
@@ -688,7 +704,7 @@ export class Game implements ProjectileWorld {
     const r = weapon.craterRadius * mods.explosionScale;
     // Carve with exactly the (rounded) values sent to the clients so the terrains stay identical
     const cr = Math.round(r * 10) / 10;
-    const carved = this.terrain.carveCircle(q(x), q(y), cr, !!weapon.fire);
+    const carved = cr > 0 ? this.terrain.carveCircle(q(x), q(y), cr, !!weapon.fire) : { modified: false, crystals: 0 };
     if (carved.modified) {
       this.emit({ t: 'crater', x: q(x), y: q(y), r: cr, ...(weapon.fire ? { f: 1 as const } : {}) });
       this.crystalReward(x, y, carved.crystals, p.ownerId);
@@ -707,6 +723,48 @@ export class Game implements ProjectileWorld {
         this.emit({ t: 'tp', x0: q(from.x), y0: q(from.y), x1: q(x), y1: q(y) });
       }
       return;
+    }
+
+    // Permutation: the caster and the wizard hit swap places
+    if (weapon.swap) {
+      const owner = this.worms.find(w => w.id === p.ownerId && w.isAlive());
+      const target = directHit ?? this.nearestWizard(x, y, 14, p.ownerId);
+      if (owner && target && target !== owner) {
+        const a = { x: owner.x, y: owner.y };
+        owner.x = owner.prevX = target.x;
+        owner.y = owner.prevY = target.y;
+        target.x = target.prevX = a.x;
+        target.y = target.prevY = a.y;
+        for (const w of [owner, target]) {
+          w.vx = w.vy = 0;
+          w.rope.release();
+        }
+        this.teleportFX(a.x, a.y, owner.x, owner.y);
+        this.emit({ t: 'tp', x0: q(a.x), y0: q(a.y), x1: q(owner.x), y1: q(owner.y) });
+      } else {
+        this.explosionFX(x, y, 4, weapon.elementColor);
+        this.emit({ t: 'boom', x: q(x), y: q(y), r: 4, c: weapon.elementColor });
+      }
+      return;
+    }
+
+    // Curses (sheep, bubble, drunk): the wizard hit, or those right next to the impact
+    if (weapon.status) {
+      const victims = directHit ? [directHit] : this.worms.filter(w => w.isAlive() && w.id !== p.ownerId && Math.hypot(w.x - x, w.y - y) < 20);
+      for (const w of victims) {
+        if (weapon.damage > 0) this.damageWorm(w, weapon.damage, 0, -0.5, p.ownerId, true);
+        if (w.isAlive()) w.curse(weapon.status, weapon.statusDuration ?? 300);
+      }
+      this.explosionFX(x, y, 6, weapon.elementColor);
+      this.emit({ t: 'boom', x: q(x), y: q(y), r: 6, c: weapon.elementColor });
+      return;
+    }
+
+    // Fiole Pestilentielle: the toxic cloud
+    if (weapon.gasCloud) {
+      this.gasClouds.push(new GasCloud(q(x), q(y), this.terrain, p.ownerId));
+      this.emit({ t: 'gas', x: q(x), y: q(y), o: p.ownerId });
+      sound.playGas();
     }
 
     this.explosionFX(x, y, r, weapon.elementColor, !!weapon.fire);
@@ -741,31 +799,6 @@ export class Game implements ProjectileWorld {
       this.applyHitEffects(p, w, dealt);
     }
 
-    // Arc Foudroyant: the bolt jumps from wizard to wizard
-    if (weapon.chainTargets) {
-      const hit = new Set<Worm>();
-      let current = directHit ?? this.nearestEnemy(x, y, 50, p.ownerId, hit);
-      const pts = [q(x), q(y)];
-      if (current && current !== directHit) {
-        this.applyHitEffects(p, current, this.damageWorm(current, weapon.damage, 0, -1, p.ownerId));
-      }
-      let dmg = weapon.damage;
-      for (let i = 0; current && i <= weapon.chainTargets; i++) {
-        hit.add(current);
-        pts.push(q(current.x), q(current.y));
-        if (i === weapon.chainTargets) break;
-        const next = this.nearestEnemy(current.x, current.y, 100, p.ownerId, hit);
-        if (!next) break;
-        dmg = Math.round(dmg * 0.75);
-        this.damageWorm(next, dmg, (next.x - current.x) * 0.02, -1, p.ownerId);
-        current = next;
-      }
-      if (pts.length > 2) {
-        this.addZap(pts);
-        this.emit({ t: 'zap', pts });
-      }
-    }
-
     if (weapon.freezeDuration) {
       const ir = Math.round(r * 3);
       if (this.terrain.freezeWater(q(x), q(y), ir)) this.emit({ t: 'ice', x: q(x), y: q(y), r: ir });
@@ -774,12 +807,6 @@ export class Game implements ProjectileWorld {
           w.freeze(weapon.freezeDuration);
         }
       }
-    }
-
-    if (weapon.acidPool && mods.acidEnabled) {
-      const ar = q(r + 5);
-      this.terrain.addAcid(q(x), q(y), ar);
-      this.emit({ t: 'acid', x: q(x), y: q(y), r: ar });
     }
 
     // Comète: splits into bouncing star shards
@@ -821,22 +848,6 @@ export class Game implements ProjectileWorld {
     }
   }
 
-  private nearestEnemy(x: number, y: number, range: number, ownerId: string, exclude: Set<Worm>): Worm | null {
-    let best: Worm | null = null;
-    let bestDist = range;
-    const teams = this.modifiers.gameMode === 'teams';
-    for (const w of this.worms) {
-      if (!w.isAlive() || w.id === ownerId || exclude.has(w)) continue;
-      if (teams && this.teamOf(w.id) === this.teamOf(ownerId)) continue;
-      const d = Math.hypot(w.x - x, w.y - y);
-      if (d < bestDist) {
-        bestDist = d;
-        best = w;
-      }
-    }
-    return best;
-  }
-
   private spawnProjectile(ownerId: string, weapon: WeaponDef, x: number, y: number, vx: number, vy: number, isSubCluster = false) {
     this.projectiles.push(new Projectile({ id: this.nextProjectileId++, ownerId, weapon, x, y, vx, vy, isSubCluster }));
   }
@@ -871,6 +882,15 @@ export class Game implements ProjectileWorld {
 
   public reflect() {
     sound.playBouncy();
+  }
+
+  private lastCroak = 0;
+  public hop() {
+    const now = performance.now();
+    if (now - this.lastCroak > 180) {
+      this.lastCroak = now;
+      sound.playCroak();
+    }
   }
 
   /** Applies match rules (self damage, friendly fire, scale) and returns the damage dealt. */
@@ -931,6 +951,92 @@ export class Game implements ProjectileWorld {
     if (victim.id === this.localId && this.phase === 'playing') this.onLocalDeath?.(victim);
   }
 
+  /** Closest living wizard (any team) other than `exceptId` */
+  private nearestWizard(x: number, y: number, range: number, exceptId: string): Worm | null {
+    let best: Worm | null = null;
+    let bestDist = range;
+    for (const w of this.worms) {
+      if (!w.isAlive() || w.id === exceptId) continue;
+      const d = Math.hypot(w.x - x, w.y - y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = w;
+      }
+    }
+    return best;
+  }
+
+  private isEnemyOf(caster: Worm) {
+    const teams = this.modifiers.gameMode === 'teams';
+    return (w: Worm) => !teams || this.teamOf(w.id) !== this.teamOf(caster.id);
+  }
+
+  /**
+   * Mains Foudroyantes (host, every few ticks while the button is held): damages and lifts
+   * the wizards caught in the arcs. A mirror shield sends the current back to the caster.
+   */
+  private lightningTick(caster: Worm, weapon: WeaponDef) {
+    const shape = computeLightning(caster, this.worms, this.terrain, this.isEnemyOf(caster));
+    const struck = shape.hits.filter(h => h.worm).map(h => h.worm!);
+    if (shape.chain) struck.push(shape.chain.to.worm!);
+    for (const [i, w] of struck.entries()) {
+      const dmg = i === struck.length - 1 && shape.chain ? 1 : weapon.damage;
+      if (w.shieldTimer > 0) {
+        this.damageWorm(caster, dmg, -Math.cos(shape.angle) * 0.3, -0.2, w.id, true);
+        continue;
+      }
+      // Lifted off the ground and held there, shaking, while the current flows
+      w.vx *= 0.6;
+      this.damageWorm(w, dmg, 0, w.vy > -0.9 ? -0.55 : 0, caster.id, true);
+    }
+  }
+
+  /** Gas clouds: spread, bubbles, and (host) poison every quarter second */
+  private updateGas() {
+    if (this.gasClouds.length === 0) return;
+    const hostTick = this.role === 'host' && this.frame % 15 === 0;
+    for (const c of this.gasClouds) {
+      c.update();
+      if (this.frame % 4 === 0) {
+        const pt = c.randomPoint();
+        if (pt) this.particles.spawn(pt.x, pt.y, (Math.random() - 0.5) * 0.2, -0.15, 'glow', '#9be84a', 3 + Math.random() * 2, 40);
+      }
+      if (!hostTick) continue;
+      for (const w of this.worms) {
+        if (!w.isAlive() || c.densityAt(w.x, w.y - 3) < 0.25) continue;
+        this.damageWorm(w, 3, 0, 0, c.ownerId, true);
+        this.particles.spawn(w.x, w.y - 8, (Math.random() - 0.5) * 0.4, -0.4, 'smoke', '#7fc23a', 5, 25);
+      }
+    }
+    this.gasClouds = this.gasClouds.filter(c => c.alive);
+  }
+
+  /** Poofs, bleats and pops when a curse starts or ends (host and clients) */
+  private curseEffects() {
+    for (const w of this.worms) {
+      const now = { sheep: w.isAlive() && w.sheepTimer > 0, bubble: w.isAlive() && w.bubbleTimer > 0, drunk: w.isAlive() && w.drunkTimer > 0 };
+      const was = this.curseSeen.get(w.id) ?? { sheep: false, bubble: false, drunk: false };
+      if (now.sheep !== was.sheep) {
+        for (let i = 0; i < 10; i++) {
+          const a = Math.random() * Math.PI * 2;
+          this.particles.spawn(w.x, w.y - 3, Math.cos(a) * 0.8, Math.sin(a) * 0.8 - 0.3, 'smoke', '#f2e6ff', 7, 30);
+        }
+        this.particles.spawn(w.x, w.y - 3, 0, 0, 'flash', '#ff7ad9', 22, 10).sprite = 'star_09';
+        if (now.sheep) sound.playBleat();
+      }
+      if (now.bubble && !was.bubble) sound.playBubble();
+      if (!now.bubble && was.bubble && w.isAlive()) {
+        for (let i = 0; i < 12; i++) {
+          const a = (i / 12) * Math.PI * 2;
+          this.particles.spawn(w.x + Math.cos(a) * 12, w.y - 4 + Math.sin(a) * 12, Math.cos(a) * 0.6, Math.sin(a) * 0.6, 'spark', '#dff4ff', 1, 16);
+        }
+        sound.playPop();
+      }
+      if (now.drunk && !was.drunk) sound.playHiccup();
+      this.curseSeen.set(w.id, now);
+    }
+  }
+
   /** Spray of blood in the direction of the hit (from the wizard's body, not his feet). */
   private bloodFX(x: number, y: number, n: number, dx: number, dy: number) {
     this.particles.spawnBloodBurst(x + dx * 2, y - 3 + dy * 2, n, dx, dy, 2.2 + Math.min(2, n / 12));
@@ -974,11 +1080,6 @@ export class Game implements ProjectileWorld {
       drawWizard(ctx, c.color, 'die', frame, c.x, c.y + WIZARD_FOOT, c.facing, WIZARD_HEIGHT);
     }
     ctx.globalAlpha = 1;
-  }
-
-  private addZap(pts: number[]) {
-    this.zaps.push({ pts, life: 14 });
-    sound.playRailgun();
   }
 
   private teleportFX(x0: number, y0: number, x1: number, y1: number) {
@@ -1033,6 +1134,10 @@ export class Game implements ProjectileWorld {
       frozen: w.freezeTimer,
       shield: w.shieldTimer,
       burn: w.burnTimer,
+      ...(w.sheepTimer > 0 ? { sh: w.sheepTimer } : {}),
+      ...(w.bubbleTimer > 0 ? { bu: w.bubbleTimer } : {}),
+      ...(w.drunkTimer > 0 ? { dr: w.drunkTimer } : {}),
+      ...(w.channelTimer > 0 ? { ch: 1 as const } : {}),
       rope: w.rope.state,
       hx: r1(w.rope.hookX),
       hy: r1(w.rope.hookY),
@@ -1100,8 +1205,9 @@ export class Game implements ProjectileWorld {
       case 'tp':
         this.teleportFX(ev.x0, ev.y0, ev.x1, ev.y1);
         break;
-      case 'zap':
-        this.addZap(ev.pts);
+      case 'gas':
+        this.gasClouds.push(new GasCloud(ev.x, ev.y, this.terrain, ev.o));
+        sound.playGas();
         break;
       case 'kill':
         this.onKill?.(ev.killer, ev.victim, ev.cause);
@@ -1137,6 +1243,10 @@ export class Game implements ProjectileWorld {
       worm.health = ws.hp;
       worm.shieldTimer = ws.shield;
       worm.burnTimer = ws.burn;
+      worm.sheepTimer = ws.sh ?? 0;
+      worm.bubbleTimer = ws.bu ?? 0;
+      worm.drunkTimer = ws.dr ?? 0;
+      if (!isLocal) worm.channelTimer = ws.ch ? 6 : 0;
 
       if (ws.hp <= 0) {
         worm.rope.release();
@@ -1187,6 +1297,7 @@ export class Game implements ProjectileWorld {
       if (p) {
         p.prevX = p.x;
         p.prevY = p.y;
+        if (p.weapon.hopper && ps.vy < -2 && p.vy > -0.5) this.hop(); // a frog jumped
       } else {
         p = new Projectile({
           id: ps.id, ownerId: '', weapon: WEAPON_REGISTRY[ps.w] ?? WEAPON_REGISTRY[DEFAULT_WEAPON],
@@ -1341,41 +1452,28 @@ export class Game implements ProjectileWorld {
     if (this.modifiers.gameMode === 'koth') this.drawKothZone(ctx);
     this.drawCorpses(ctx, now);
     for (const w of this.worms) w.draw(ctx, alpha, w.id === this.localId, this.terrain, now);
+    for (const c of this.gasClouds) c.draw(ctx, now);
+    this.drawChannels(ctx, now);
     this.particles.draw(ctx);
     for (const p of this.projectiles) p.draw(ctx, alpha, now);
-    this.drawZaps(ctx);
     if (!smooth) this.terrain.drawLiquids(ctx, this.frame);
     ctx.restore();
 
     this.drawOffScreenIndicators();
   }
 
-  /** Jagged lightning arcs of the Arc Foudroyant */
-  private drawZaps(ctx: CanvasRenderingContext2D) {
-    if (this.zaps.length === 0) return;
-    ctx.save();
-    ctx.shadowColor = '#9fe8ff';
-    ctx.shadowBlur = 10;
-    ctx.lineJoin = 'round';
-    for (const z of this.zaps) {
-      ctx.globalAlpha = Math.min(1, z.life / 8);
-      for (const [width, color] of [[2.4, '#6fd6ff'], [1, '#ffffff']] as const) {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = width;
-        ctx.beginPath();
-        ctx.moveTo(z.pts[0], z.pts[1]);
-        for (let i = 2; i + 1 < z.pts.length; i += 2) {
-          const x0 = z.pts[i - 2], y0 = z.pts[i - 1], x1 = z.pts[i], y1 = z.pts[i + 1];
-          for (let k = 1; k <= 4; k++) {
-            const t = k / 5;
-            ctx.lineTo(x0 + (x1 - x0) * t + (Math.random() - 0.5) * 6, y0 + (y1 - y0) * t + (Math.random() - 0.5) * 6);
-          }
-          ctx.lineTo(x1, y1);
-        }
-        ctx.stroke();
-      }
+  /** Mains Foudroyantes: arcs from every wizard who keeps the button held */
+  private drawChannels(ctx: CanvasRenderingContext2D, now: number) {
+    let crackling = false;
+    for (const w of this.worms) {
+      if (!w.isAlive() || w.channelTimer <= 0 || !w.weapon.channel) continue;
+      drawLightning(ctx, computeLightning(w, this.worms, this.terrain, this.isEnemyOf(w)), now);
+      crackling = true;
     }
-    ctx.restore();
+    if (crackling && now - this.lastCrackle > 110) {
+      this.lastCrackle = now;
+      sound.playCrackle();
+    }
   }
 
   private drawKothZone(ctx: CanvasRenderingContext2D) {

@@ -18,6 +18,8 @@ export interface ProjectileWorld {
   bounce(p: Projectile): void;
   /** A spell was sent back by a mirror shield. */
   reflect(p: Projectile): void;
+  /** A frog jumped. */
+  hop(p: Projectile): void;
 }
 
 export interface ProjectileParams {
@@ -60,6 +62,8 @@ export class Projectile {
   /** Rune trap armed — set by the host, synced for rendering on clients */
   public armed: boolean = false;
   private trailTick = 0;
+  /** Frogs: ticks before the next jump */
+  private hopTimer = 10;
 
   constructor(p: ProjectileParams) {
     this.id = p.id;
@@ -98,6 +102,28 @@ export class Projectile {
           this.detonate(world, null);
           return;
         }
+      }
+    }
+
+    // Frogs: hop towards the nearest enemy whenever they touch the ground
+    if (this.weapon.hopper) {
+      // Jumps on any other wizard that comes close
+      for (const w of worms) {
+        if (w.isAlive() && w.id !== this.ownerId && Math.hypot(w.x - this.x, w.y - 2 - this.y) < 9) {
+          this.detonate(world, w);
+          return;
+        }
+      }
+      if (this.hopTimer > 0) this.hopTimer--;
+      if (this.hopTimer <= 0 && this.vy >= -0.2 && (this.resting || terrain.isSolid(this.x, this.y + 3))) {
+        const target = this.findTarget(worms, 420);
+        const dir = target ? Math.sign(target.x - this.x) || 1 : this.vx >= 0 ? 1 : -1;
+        const high = target && target.y < this.y - 18;
+        this.vx = dir * (1.1 + Math.random() * 0.6);
+        this.vy = -(high ? 3.6 : 2.5 + Math.random() * 0.5);
+        this.resting = false;
+        this.hopTimer = 20 + Math.floor(Math.random() * 14);
+        world.hop(this);
       }
     }
 
@@ -331,8 +357,17 @@ export class Projectile {
       case 'flamer':
         particles.spawn(x, y, r() * 0.4, -0.3, 'fire', undefined, 5 + Math.random() * 3, 14);
         break;
-      case 'minigun':
-        if (t % 2 === 0) particles.spawn(x, y, r() * 0.2, r() * 0.2, 'spark', color, 0.8, 10);
+      case 'polymorph':
+        if (t % 2 === 0) particles.spawn(x + r() * 4, y + r() * 4, r() * 0.3, r() * 0.3, 'spark', Math.random() < 0.5 ? color : '#ffffff', 0.9, 18);
+        break;
+      case 'drunk':
+        if (t % 3 === 0) particles.spawn(x, y, r() * 0.3, -0.3, 'glow', '#d7f06a', 4, 22);
+        break;
+      case 'bubble':
+        if (t % 4 === 0) particles.spawn(x + r() * 6, y + r() * 6, r() * 0.2, -0.25, 'glow', '#cfeeff', 3, 30);
+        break;
+      case 'swap':
+        particles.spawn(x, y, r() * 0.3, r() * 0.3, 'spark', t % 2 ? '#38d6ff' : '#ff9a3c', 0.9, 12);
         break;
       case 'homing_missile':
         particles.spawn(x + r() * 3, y + r() * 3, r() * 0.3, -0.2, 'glow', color, 6, 18);
@@ -343,8 +378,8 @@ export class Projectile {
       case 'vortex':
         if (t % 2 === 0) particles.spawn(x + r() * 10, y + r() * 10, r() * 0.6, r() * 0.6, 'smoke', '#2a1450', 7, 22);
         break;
-      case 'acid_bomb':
-        if (t % 2 === 0) particles.spawn(x, y, r() * 0.5, -0.4, 'spark', color, 1, 15);
+      case 'toxic_cloud':
+        if (t % 2 === 0) particles.spawn(x, y, r() * 0.5, -0.3, 'smoke', '#7fc23a', 4, 25);
         break;
       case 'freeze_bomb':
         particles.spawn(x + r() * 4, y + r() * 4, r() * 0.3, 0.1, 'spark', '#dff8ff', 0.8, 18);
@@ -361,10 +396,6 @@ export class Projectile {
       case 'teleport':
         particles.spawn(x + r() * 6, y + r() * 6, 0, 0, 'spark', color, 1, 14);
         break;
-      case 'chain_lightning':
-        particles.spawn(x, y, r() * 1.5, r() * 1.5, 'spark', '#cff6ff', 0.8, 8);
-        break;
-      case 'grenade':
       case 'chiquita':
         if (t % 2 === 0) particles.spawn(x, y, r() * 0.3, r() * 0.3, 'spark', color, 0.9, 16);
         break;
@@ -398,19 +429,82 @@ export class Projectile {
         drawFx(ctx, 'flame_02', x, y, 13, '#ff9a1f', 0.9, spin * 2);
         drawFx(ctx, 'circle_05', x, y, 7, '#fff4c2', 1);
         break;
-      case 'minigun': // Éclats Arcaniques
-        drawFx(ctx, 'trace_01', x, y, 7, color, 1, dir + Math.PI / 2, 2);
-        drawFx(ctx, 'circle_05', x, y, 9, color, 0.8);
-        drawFx(ctx, 'star_04', x, y, 6, '#ffffff', 1, dir);
+      case 'frogs': { // Crapauds Kamikazes
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1;
+        const f = this.vx >= 0 ? 1 : -1;
+        const air = !this.resting && Math.abs(this.vy) > 0.4;
+        ctx.translate(x, y);
+        ctx.scale(f, 1);
+        // back legs (stretched while jumping)
+        ctx.strokeStyle = '#2f8a22';
+        ctx.lineWidth = 1.1;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(-1.5, 1);
+        ctx.lineTo(air ? -5 : -3.5, air ? 3 : 2.2);
+        ctx.stroke();
+        ctx.fillStyle = '#4fc23a';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 3.6, 2.6, air ? -0.35 : 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#c9f08a';
+        ctx.beginPath();
+        ctx.ellipse(0.8, 1.1, 2, 1.1, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // bulging eyes
+        for (const ex of [0.6, 2.4]) {
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(ex, -2.2, 1.1, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#111111';
+          ctx.beginPath();
+          ctx.arc(ex + 0.3, -2.2, 0.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        // lit fuse on the back, blinking faster as it nears the end
+        const blink = this.fuse < 90 ? Math.floor(now / 90) % 2 === 0 : Math.floor(now / 300) % 2 === 0;
+        ctx.globalCompositeOperation = 'lighter';
+        drawFx(ctx, 'circle_05', -1.5, -2.2, blink ? 6 : 3.5, '#ff5a2a', 0.9);
         break;
-      case 'shotgun': // Choc d'Étincelles
-        drawFx(ctx, 'circle_05', x, y, 8, color, 0.9, dir, 1 + speed * 0.3);
-        drawFx(ctx, 'star_04', x, y, 8, '#ffffff', 1, spin);
+      }
+      case 'polymorph': // Métamorphose Ovine
+        drawFx(ctx, 'circle_05', x, y, 14 + pulse * 3, color, 0.7);
+        drawFx(ctx, 'magic_02', x, y, 12, '#ffd2f3', 0.9, spin * 1.5);
+        drawFx(ctx, 'star_04', x, y, 8, '#ffffff', 1, -spin);
         break;
-      case 'grenade': // Orbe du Chaos
-        drawFx(ctx, 'circle_05', x, y, 16 + pulse * 4, color, 0.7);
-        drawFx(ctx, 'magic_02', x, y, 13, color, 0.9, spin);
-        drawFx(ctx, 'circle_05', x, y, 5, '#ffffff', 1);
+      case 'drunk': { // Philtre d'Ivresse: a spinning bottle of grog
+        drawFx(ctx, 'circle_05', x, y, 13, color, 0.45);
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1;
+        ctx.translate(x, y);
+        ctx.rotate(spin * 2.5);
+        ctx.fillStyle = '#7a4a1e';
+        ctx.fillRect(-0.9, -5, 1.8, 2.4);
+        ctx.fillStyle = '#c99a3a';
+        ctx.beginPath();
+        ctx.ellipse(0, 0.6, 2.6, 3.2, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#f1e7b6';
+        ctx.fillRect(-1.6, -0.2, 3.2, 1.6);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+        ctx.beginPath();
+        ctx.arc(-1, -0.6, 0.7, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+      }
+      case 'bubble': // Bulle Farceuse
+        drawFx(ctx, 'light_01', x, y, 15, color, 0.4, spin * 0.3);
+        drawFx(ctx, 'circle_02', x, y, 13 + pulse, '#e6f7ff', 0.85);
+        drawFx(ctx, 'circle_05', x - 2.5, y - 2.5, 3.5, '#ffffff', 0.9);
+        break;
+      case 'swap': // Permutation: two orbs chasing each other
+        for (const [k, c] of [[0, '#38d6ff'], [Math.PI, '#ff9a3c']] as const) {
+          const a = spin * 4 + k;
+          drawFx(ctx, 'circle_05', x + Math.cos(a) * 3, y + Math.sin(a) * 3, 8, c, 1);
+        }
+        drawFx(ctx, 'circle_05', x, y, 4, '#ffffff', 1);
         break;
       case 'chiquita': // Comète Étoilée (and its shards)
         if (this.isSubCluster) {
@@ -453,7 +547,7 @@ export class Projectile {
         drawFx(ctx, 'circle_05', x, y, 10, '#ff5a14', 0.6);
         drawFx(ctx, 'flame_01', x, y, 9, '#ffb347', 0.9, spin * 3);
         break;
-      case 'acid_bomb': // Fiole d'Alchimiste: a real flask, with a toxic glow
+      case 'toxic_cloud': // Fiole Pestilentielle: a real flask, with a toxic glow
         drawFx(ctx, 'circle_05', x, y, 15, color, 0.45 + pulse * 0.2);
         ctx.globalCompositeOperation = 'source-over';
         ctx.globalAlpha = 1;
@@ -503,12 +597,6 @@ export class Projectile {
         drawFx(ctx, 'twirl_02', x, y, 16, color, 1, spin * 3);
         drawFx(ctx, 'circle_05', x, y, 6, '#ffffff', 1);
         break;
-      case 'chain_lightning': { // Arc Foudroyant: flickering ball of lightning
-        const flick = Math.floor(now / 50) % 2 === 0;
-        drawFx(ctx, 'circle_05', x, y, 15, color, 0.7);
-        drawFx(ctx, flick ? 'spark_01' : 'spark_02', x, y, 17, '#e6faff', 1, Math.floor(now / 50) * 1.3);
-        break;
-      }
       case 'meteor':
         if (this.isSubCluster) {
           drawFx(ctx, 'circle_05', x, y, 22, '#ff6a1a', 0.7);

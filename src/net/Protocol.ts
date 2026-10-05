@@ -16,7 +16,6 @@ export interface MatchModifiers {
   ropeReach: 'normal' | 'infinite';
   wormSpeed: number;        // 1.0 normal, 1.5 turbo, 0.75 tactical
   maxHealth: number;        // 100, 50, 200
-  unlimitedAmmo: boolean;
   damageScale: number;      // 0.5, 1, 2, 3
   regenRate: number;        // HP per second
   explosionScale: number;   // multiplies crater & blast radius
@@ -34,7 +33,6 @@ export const DEFAULT_MODIFIERS: MatchModifiers = {
   ropeReach: 'normal',
   wormSpeed: 1.0,
   maxHealth: 100,
-  unlimitedAmmo: false,
   damageScale: 1.0,
   regenRate: 0,
   explosionScale: 1.0,
@@ -65,6 +63,10 @@ export interface WormNetState {
   frozen: number;
   shield: number;
   burn: number;
+  sh?: number;  // curses: sheep / bubble / drunk ticks left
+  bu?: number;
+  dr?: number;
+  ch?: 1;       // channelling the Mains Foudroyantes
   rope: RopeState;
   hx: number;
   hy: number;
@@ -93,7 +95,7 @@ export type NetEvent =
   | { t: 'shot'; id: string; w: WeaponId }
   | { t: 'fill'; x: number; y: number; r: number; keep: number[] }
   | { t: 'tp'; x0: number; y0: number; x1: number; y1: number }
-  | { t: 'zap'; pts: number[] }
+  | { t: 'gas'; x: number; y: number; o: string }   // toxic cloud (o = caster)
   | { t: 'kill'; killer: string | null; victim: string; cause?: KillCause };
 
 export type KillCause = 'acid' | 'lava' | 'self';

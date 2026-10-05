@@ -137,58 +137,6 @@ export class SoundEffects {
     osc.stop(t + duration * 0.7);
   }
 
-  public playShotgun() {
-    if (!this.enabled) return;
-    this.initCtx();
-    if (!this.ctx || !this.noiseBuffer) return;
-
-    const t = this.ctx.currentTime;
-    const noise = this.ctx.createBufferSource();
-    noise.buffer = this.noiseBuffer;
-
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.setValueAtTime(1400, t);
-    filter.frequency.exponentialRampToValueAtTime(200, t + 0.25);
-    filter.Q.value = 2;
-
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.7 * this.volume, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
-
-    noise.connect(filter);
-    filter.connect(gain);
-    gain.connect(this.ctx.destination);
-
-    noise.start(t);
-    noise.stop(t + 0.25);
-  }
-
-  public playMinigun() {
-    if (!this.enabled) return;
-    this.initCtx();
-    if (!this.ctx || !this.noiseBuffer) return;
-
-    const t = this.ctx.currentTime;
-    const noise = this.ctx.createBufferSource();
-    noise.buffer = this.noiseBuffer;
-
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'highpass';
-    filter.frequency.setValueAtTime(1000, t);
-
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.3 * this.volume, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
-
-    noise.connect(filter);
-    filter.connect(gain);
-    gain.connect(this.ctx.destination);
-
-    noise.start(t);
-    noise.stop(t + 0.05);
-  }
-
   public playGrenadeBounce() {
     if (!this.enabled) return;
     this.initCtx();
@@ -412,6 +360,100 @@ export class SoundEffects {
     }
   }
 
+  // ── Small synth helpers for the funny spells ─────────────────────────────
+
+  private tone(type: OscillatorType, f0: number, f1: number, dur: number, vol: number, delay = 0, vibrato = 0) {
+    if (!this.enabled) return;
+    this.initCtx();
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime + delay;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(f0, t);
+    osc.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    if (vibrato > 0) {
+      const lfo = this.ctx.createOscillator();
+      const depth = this.ctx.createGain();
+      lfo.frequency.value = 22;
+      depth.gain.value = vibrato;
+      lfo.connect(depth);
+      depth.connect(osc.frequency);
+      lfo.start(t);
+      lfo.stop(t + dur);
+    }
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(vol * this.volume, t + Math.min(0.03, dur / 4));
+    gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + dur);
+  }
+
+  private noise(filter: BiquadFilterType, f0: number, f1: number, dur: number, vol: number, q = 1) {
+    if (!this.enabled) return;
+    this.initCtx();
+    if (!this.ctx || !this.noiseBuffer) return;
+    const t = this.ctx.currentTime;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    src.loop = true;
+    const f = this.ctx.createBiquadFilter();
+    f.type = filter;
+    f.Q.value = q;
+    f.frequency.setValueAtTime(f0, t);
+    f.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(vol * this.volume, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    src.connect(f);
+    f.connect(gain);
+    gain.connect(this.ctx.destination);
+    src.start(t, Math.random());
+    src.stop(t + dur);
+  }
+
+  /** Métamorphose: « bêêê » (vibrato on a nasal saw) */
+  public playBleat() {
+    this.tone('sawtooth', 520, 470, 0.55, 0.16, 0, 28);
+    this.tone('square', 1040, 900, 0.5, 0.04, 0, 40);
+  }
+
+  /** Crapauds: « croâ » */
+  public playCroak() {
+    this.tone('square', 170, 110, 0.12, 0.12);
+    this.tone('square', 150, 95, 0.1, 0.1, 0.13);
+  }
+
+  /** Mains Foudroyantes: short electric crackle */
+  public playCrackle() {
+    this.noise('highpass', 2500 + Math.random() * 2000, 1200, 0.09, 0.22, 0.7);
+    this.tone('sawtooth', 90 + Math.random() * 40, 60, 0.08, 0.05);
+  }
+
+  /** Philtre d'Ivresse: « hic ! » */
+  public playHiccup() {
+    this.tone('triangle', 400, 900, 0.08, 0.2);
+    this.tone('triangle', 380, 850, 0.08, 0.16, 0.45);
+  }
+
+  /** Bulle Farceuse: bubbly rising blips */
+  public playBubble() {
+    for (let i = 0; i < 4; i++) this.tone('sine', 300 + i * 120, 700 + i * 160, 0.09, 0.13, i * 0.07);
+  }
+
+  public playPop() {
+    this.tone('sine', 900, 120, 0.07, 0.3);
+    this.noise('bandpass', 2000, 800, 0.05, 0.25, 2);
+  }
+
+  /** Fiole Pestilentielle: glass, then a long hiss of gas */
+  public playGas() {
+    this.tone('triangle', 2400, 1800, 0.08, 0.12);
+    this.noise('bandpass', 3000, 900, 1.4, 0.18, 0.8);
+  }
+
   public playSpellForWeapon(weaponId: string) {
     if (!this.enabled) return;
     this.initCtx();
@@ -423,16 +465,7 @@ export class SoundEffects {
         this.playSpellSample(0, 1.1);
         this.playBazooka();
         break;
-      case 'minigun':
-        this.playSpellSample(1, 0.9);
-        this.playMinigun();
-        break;
-      case 'shotgun':
-        this.playSpellSample(1, 0.9);
-        this.playShotgun();
-        break;
       case 'railgun':
-      case 'chain_lightning':
         this.playSpellSample(3, 1.2);
         this.playRailgun();
         break;
@@ -444,6 +477,7 @@ export class SoundEffects {
         break;
       case 'vortex':
       case 'teleport':
+      case 'swap':
         this.playSpellSample(4, 1.1);
         this.playVortex();
         break;
@@ -452,10 +486,19 @@ export class SoundEffects {
         this.playHoming();
         break;
       case 'boomerang':
+      case 'bubble':
         this.playSpellSample(1, 0.9);
         this.playBouncy();
         break;
-      default: // grenade, chiquita, mine, acid_bomb, earth_wall
+      case 'frogs':
+        this.playCroak();
+        break;
+      case 'polymorph':
+      case 'drunk':
+        this.playSpellSample(2, 0.9);
+        this.playBouncy();
+        break;
+      default: // chiquita, mine, toxic_cloud, earth_wall
         this.playSpellSample(4, 1.0);
         this.playGrenadeBounce();
     }

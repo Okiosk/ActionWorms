@@ -1,33 +1,35 @@
 export type WeaponId =
   | 'bazooka'
-  | 'minigun'
-  | 'shotgun'
-  | 'grenade'
-  | 'flamer'
+  | 'frogs'
   | 'boomerang'
+  | 'flamer'
   | 'earth_wall'
+  | 'swap'
   | 'mine'
+  | 'drunk'
+  | 'bubble'
   | 'leech'
   | 'teleport'
   | 'chiquita'
-  | 'acid_bomb'
+  | 'polymorph'
+  | 'toxic_cloud'
   | 'homing_missile'
   | 'freeze_bomb'
   | 'shield'
-  | 'chain_lightning'
+  | 'force_lightning'
   | 'meteor'
   | 'railgun'
   | 'vortex';
+
+/** Lasting curses applied to the wizards that are hit */
+export type StatusEffect = 'sheep' | 'bubble' | 'drunk';
 
 export interface WeaponDef {
   id: WeaponId;
   name: string;
   description: string;
-  icon: string;
   price: number;           // 0 = free
-  reloadTime: number;      // ticks between shots
-  clipSize: number;
-  clipReloadTime: number;  // ticks to refill an empty clip
+  cooldown: number;        // ticks between two casts (no ammo, no reload)
   projectileSpeed: number;
   spread: number;          // radians of random deviation
   damage: number;          // full damage on a direct hit
@@ -41,15 +43,19 @@ export interface WeaponDef {
   pelletCount?: number;     // several projectiles per cast
   splitCount?: number;      // splits into small bombs when it explodes
   homing?: boolean;         // chases the nearest enemy
+  hopper?: boolean;         // hops along the ground towards the nearest enemy (frogs)
   vortex?: boolean;         // pulls wizards in while flying
   boomerang?: boolean;      // flies back to its caster after half its fuse
-  acidPool?: boolean;       // leaves an acid pool on detonation
+  gasCloud?: boolean;       // releases a toxic cloud that spreads through the tunnels
   freezeDuration?: number;  // ticks to freeze nearby wizards
   burnDuration?: number;    // ticks of burning (damage over time) on hit
   lifesteal?: number;       // fraction of the damage dealt that heals the caster
   teleport?: boolean;       // the caster is teleported where it lands
+  swap?: boolean;           // the caster and the wizard hit swap places
+  status?: StatusEffect;    // curse applied to the wizards hit…
+  statusDuration?: number;  // …for this many ticks
   buildRadius?: number;     // creates a dirt mound instead of a crater
-  chainTargets?: number;    // lightning jumps to this many extra wizards
+  channel?: boolean;        // held down: continuous electric arcs (no projectile)
   meteorCount?: number;     // calls this many meteors from the sky where it lands
   shieldDuration?: number;  // self-cast: reflecting shield for this many ticks (no projectile)
   fire?: boolean;           // fire spell: burns wood, fizzles in water

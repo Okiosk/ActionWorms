@@ -161,15 +161,14 @@ export class HUD {
       this.weaponIcon.setAttribute('style', spellIconStyle(w.id));
     }
     this.weaponName.textContent = w.name;
-    if (mods.unlimitedAmmo) {
-      this.ammo.textContent = '∞';
-      this.reloadFill.style.width = local.shotCooldown > 0 ? `${100 - (local.shotCooldown / w.reloadTime) * 100}%` : '100%';
-    } else if (local.clipReloadCooldown > 0) {
-      this.ammo.textContent = 'Recharge…';
-      this.reloadFill.style.width = `${100 - (local.clipReloadCooldown / w.clipReloadTime) * 100}%`;
+    if (local.sheepTimer > 0) {
+      this.ammo.textContent = 'Bêêê !';
+      this.reloadFill.style.width = '0%';
     } else {
-      this.ammo.textContent = `${local.clipAmmo} / ${w.clipSize}`;
-      this.reloadFill.style.width = local.shotCooldown > 0 ? `${100 - (local.shotCooldown / w.reloadTime) * 100}%` : '100%';
+      // Only a short cooldown between two casts
+      const ready = local.shotCooldown <= 0;
+      this.ammo.textContent = ready ? 'Prêt' : `${(local.shotCooldown / 60).toFixed(1)} s`;
+      this.reloadFill.style.width = ready ? '100%' : `${100 - (local.shotCooldown / w.cooldown) * 100}%`;
     }
     this.money.textContent = `✨ ${local.money} or`;
   }
