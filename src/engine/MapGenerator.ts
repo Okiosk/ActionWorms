@@ -5,7 +5,7 @@ import { CONFIG } from '../config';
  * Terrain then paints them with the map's theme.
  */
 
-export type MapType = 'cave' | 'volcano' | 'forest' | 'citadel' | 'glacier' | 'sky' | 'desert' | 'mine' | 'hourglass';
+export type MapType = 'cave' | 'volcano' | 'forest' | 'citadel' | 'glacier' | 'sky' | 'desert' | 'mine';
 
 type RGB = [number, number, number];
 
@@ -17,7 +17,7 @@ export interface MapTheme {
   leaves?: RGB;          // forest canopy colour
   rock: RGB;
   bricks?: boolean;      // rock drawn as masonry
-  backdrop: 'cave' | 'volcano' | 'forest' | 'citadel' | 'glacier' | 'sky' | 'desert' | 'mine' | 'clock';
+  backdrop: 'cave' | 'volcano' | 'forest' | 'citadel' | 'glacier' | 'sky' | 'desert' | 'mine';
 }
 
 export const MAP_THEMES: Record<MapType, MapTheme> = {
@@ -29,7 +29,6 @@ export const MAP_THEMES: Record<MapType, MapTheme> = {
   sky:     { skyTop: '#22306a', skyBottom: '#0f1533', dirt: [122, 82, 46], surface: [92, 172, 72], rock: [96, 96, 108], backdrop: 'sky' },
   desert:  { skyTop: '#1b1436', skyBottom: '#7a3f2c', dirt: [168, 112, 70], surface: null, rock: [176, 136, 92], bricks: true, backdrop: 'desert' },
   mine:    { skyTop: '#140e0a', skyBottom: '#070504', dirt: [92, 66, 48], surface: null, rock: [74, 74, 82], backdrop: 'mine' },
-  hourglass: { skyTop: '#141a33', skyBottom: '#06080f', dirt: [104, 84, 66], surface: [96, 150, 70], rock: [150, 128, 92], bricks: true, backdrop: 'clock' }
 };
 
 export interface GeneratedLayout {
@@ -54,7 +53,6 @@ export function generateLayout(
     case 'sky': genSky(g, hazards); break;
     case 'desert': genDesert(g, hazards); break;
     case 'mine': genMine(g, hazards); break;
-    case 'hourglass': genHourglass(g, hazards); break;
     case 'cave':
     default: genCave(g, hazards); break;
   }
@@ -922,83 +920,4 @@ function genMine(g: Grid, hazards: boolean) {
   // Flooded bottom gallery
   const deep = levels[levels.length - 1];
   for (let x = 30; x < W - 30; x += 50) g.basin(x, deep - 4, 8, hazards && x > W / 2 ? LAVA : WATER, 3000);
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// Le Sablier — a giant hourglass: break the crystal neck and the sand pours down
-// ═════════════════════════════════════════════════════════════════════════════
-
-function genHourglass(g: Grid, hazards: boolean) {
-  const { W, H } = g;
-  g.fill(AIR);
-  const cx = W / 2;
-  const top = 58;
-  const neck = Math.round(H * 0.5);
-  const bottom = H - 62;
-  const bulb = 108;
-
-  // Bottom pool and floor
-  g.rect(0, H - 24, W, H, ROCK);
-  g.rect(0, H - 40, W, H - 24, hazards ? LAVA : WATER);
-
-  // The two glass bulbs (ice, 3 px), wide at the ends and pinched at the neck
-  const widthAt = (y: number) => {
-    const t = Math.abs(y - neck) / (neck - top);
-    return 5 + bulb * Math.sin(Math.min(1, t) * Math.PI * 0.5) ** 1.4;
-  };
-  for (let y = top; y <= bottom; y++) {
-    const hw = widthAt(y);
-    g.rect(cx - hw - 3, y, cx - hw, y, ICE);
-    g.rect(cx + hw, y, cx + hw + 3, y, ICE);
-  }
-  // Brass/stone frame: plates and pillars
-  g.rect(cx - bulb - 30, top - 14, cx + bulb + 30, top, ROCK);
-  g.rect(cx - bulb - 30, bottom, cx + bulb + 30, bottom + 14, ROCK);
-  for (const side of [-1, 1]) g.rect(cx + side * (bulb + 22) - 4, top, cx + side * (bulb + 22) + 4, bottom, ROCK);
-  // Sand in the upper bulb, held by a crystal plug in the neck
-  for (let y = top + 40; y < neck - 4; y++) {
-    const hw = widthAt(y);
-    g.rect(cx - hw + 1, y, cx + hw - 1, y, SAND, [AIR]);
-  }
-  g.rect(cx - 6, neck - 4, cx + 6, neck + 2, CRYSTAL);
-  // A bit of sand already in the lower bulb, and a powder charge to blow the glass
-  for (let y = bottom - 16; y < bottom; y++) {
-    const hw = widthAt(y) * Math.min(1, (y - (bottom - 16)) / 16);
-    g.rect(cx - hw, y, cx + hw, y, SAND, [AIR]);
-  }
-  g.rect(cx - 5, bottom - 22, cx + 5, bottom - 17, POWDER, [AIR]);
-  // Doors in the glass so wizards can get inside the bulbs
-  for (const side of [-1, 1]) {
-    const yy = bottom - 50;
-    g.rect(cx + side * widthAt(yy) - 5, yy - 14, cx + side * widthAt(yy) + 5, yy, AIR, [ICE]);
-  }
-
-  // Clock towers on both sides with wooden floors
-  for (const side of [-1, 1]) {
-    const tx = side < 0 ? 70 : W - 70;
-    g.rect(tx - 34, H * 0.3, tx - 28, H - 40, ROCK);
-    g.rect(tx + 28, H * 0.3, tx + 34, H - 40, ROCK);
-    for (let y = Math.round(H * 0.3) + 40; y < H - 50; y += 50) {
-      g.rect(tx - 28, y, tx + 28, y + 3, WOOD);
-      const gap = (y / 50) % 2 < 1 ? tx - 26 : tx + 8;
-      g.rect(gap, y, gap + 18, y + 3, AIR);
-    }
-    g.ellipse(tx, H * 0.3, 40, 16, DIRT, [AIR], true);
-    g.rect(tx - 34, H * 0.3 - 2, tx + 34, H * 0.3 + 3, ROCK);
-    g.rect(tx + side * 34 - 2, H * 0.5, tx + side * 34 + 2, H * 0.5 + 16, AIR); // window
-    g.mushroom(tx + side * -48, H - 40, 9);
-  }
-
-  // Floating islands of earth between the towers and the hourglass, with sand caps
-  for (let i = 0; i < 6; i++) {
-    const side = i % 2 === 0 ? -1 : 1;
-    const x = cx + side * g.r(bulb + 50, bulb + 90);
-    const y = g.r(H * 0.2, H * 0.78);
-    g.blob(x, y, g.r(10, 16), DIRT);
-    g.ellipse(x, y - 10, g.r(10, 14), 5, SAND, [AIR]);
-    if (g.rand() < 0.4) g.blob(x, y + 6, 3, CRYSTAL);
-  }
-  g.crystals(6, [DIRT]);
-  // Top ledge above the hourglass (rope anchor, sniper spot)
-  g.ellipse(cx, top - 40, 40, 6, DIRT);
 }

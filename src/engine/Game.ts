@@ -1405,6 +1405,7 @@ export class Game implements ProjectileWorld {
       ...(w.bubbleTimer > 0 ? { bu: w.bubbleTimer } : {}),
       ...(w.drunkTimer > 0 ? { dr: w.drunkTimer } : {}),
       ...(w.channelTimer > 0 ? { ch: 1 as const } : {}),
+      ...(w.jumpHold > 0 ? { jh: w.jumpHold } : {}),
       rope: w.rope.state,
       hx: r1(w.rope.hookX),
       hy: r1(w.rope.hookY),
@@ -1529,6 +1530,7 @@ export class Game implements ProjectileWorld {
       worm.sheepTimer = ws.sh ?? 0;
       worm.bubbleTimer = ws.bu ?? 0;
       worm.drunkTimer = ws.dr ?? 0;
+      worm.jumpHold = ws.jh ?? 0;
       if (!isLocal) worm.channelTimer = ws.ch ? 6 : 0;
 
       if (ws.hp <= 0) {

@@ -853,28 +853,6 @@ export class Terrain {
           ctx.fillRect(x - 22, y - 22, 44, 44);
         }
         break;
-      case 'clock': {
-        stars(90, H * 0.6);
-        // Huge gears turning in the background (static silhouettes)
-        const gear = (gx: number, gy: number, r: number, teeth: number) => {
-          ctx.fillStyle = 'rgba(70, 64, 90, 0.35)';
-          ctx.beginPath();
-          for (let i = 0; i <= teeth * 2; i++) {
-            const a = (i / (teeth * 2)) * Math.PI * 2;
-            const rr = i % 2 === 0 ? r : r * 0.86;
-            ctx.lineTo(gx + Math.cos(a) * rr, gy + Math.sin(a) * rr);
-          }
-          ctx.fill();
-          ctx.fillStyle = 'rgba(20, 22, 40, 0.9)';
-          ctx.beginPath();
-          ctx.arc(gx, gy, r * 0.3, 0, Math.PI * 2);
-          ctx.fill();
-        };
-        gear(W * 0.18, H * 0.3, 90, 18);
-        gear(W * 0.8, H * 0.6, 120, 24);
-        gear(W * 0.42, H * 0.82, 60, 12);
-        break;
-      }
       case 'sky':
         stars(100, H * 0.5);
         for (let i = 0; i < 14; i++) {

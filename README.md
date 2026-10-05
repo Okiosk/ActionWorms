@@ -25,7 +25,7 @@ Aucun serveur de jeu : l'hôte simule la partie et l'envoie aux autres joueurs 6
 ## Modes et options (choisis par l'hôte)
 
 - **Mêlée** (chacun pour soi), **Équipes** (Rouge contre Bleu, pas de tir ami) ou **Colline** (rester seul dans la zone centrale).
-- 9 cartes générées avec aperçu exact dans le salon (bouton « Autre carte » pour une variante).
+- 8 cartes générées avec aperçu exact dans le salon (bouton « Autre carte » pour une variante).
 - Points de vie (50 / 100 / 200) et dégâts (×½ / ×1 / ×2).
 - **Mutateurs** : des cartes à activer ou désactiver d'un clic (🎲 « Surprise » en active 3 au hasard). Les mutateurs actifs sont rappelés en jeu sous l'objectif.
 
@@ -61,7 +61,6 @@ Aucun serveur de jeu : l'hôte simule la partie et l'envoie aux autres joueurs 6
 | ☁️ Archipel | Îles flottantes au-dessus de l'océan |
 | 🏜️ Pyramide | Dunes qui s'effondrent dans les grottes, pyramide au tombeau piégé, oasis |
 | ⛏️ Mine | Galeries étayées sur 4 niveaux, barils de poudre, filons de cristal |
-| ⏳ Sablier | Un sablier géant : brise le goulot de cristal et le sable dégringole |
 
 ## Matériaux
 

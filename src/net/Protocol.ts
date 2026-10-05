@@ -56,6 +56,7 @@ export interface WormNetState {
   bu?: number;
   dr?: number;
   ch?: 1;       // channelling the Mains Foudroyantes
+  jh?: number;  // variable jump: ticks of thrust left while the key is held
   rope: RopeState;
   hx: number;
   hy: number;

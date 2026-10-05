@@ -35,6 +35,13 @@ const FEET = 5;
 const HEAD = 5;
 const SIDE = 4.6;
 
+/** Variable jump: initial impulse (fraction of WORM_JUMP_FORCE), then while the key is held
+ * up to JUMP_HOLD_TICKS ticks of thrust cancelling most of the gravity.
+ * Tap ≈ 16 px high, full hold ≈ 40 px. */
+const JUMP_TAP = 0.75;
+const JUMP_HOLD_TICKS = 15;
+const JUMP_HOLD_LIFT = 0.86;
+
 /** Height of the painted wizard in world pixels, and where his feet are below the centre */
 export const WIZARD_HEIGHT = 20;
 export const WIZARD_FOOT = 5.7;
@@ -61,6 +68,10 @@ export class Worm {
   public rules: Rules = rulesOf(DEFAULT_MODIFIERS.mutators);
   /** Ticks before this wizard can go through a portal again */
   public portalCooldown = 0;
+  /** Variable jump: ticks during which holding the jump key keeps pushing (synced) */
+  public jumpHold = 0;
+  /** Standing on the ceiling of a gravity anomaly */
+  public upsideDown = false;
   public maxHealth: number = 100;
   public health: number = 0;
   public frags: number = 0;
@@ -210,11 +221,16 @@ export class Worm {
 
   /** Movement: aim, rope, walking, jumping, gravity and collisions. */
   private step(input: WormInput, terrain: Terrain, fx: WormFx | null) {
-    this.grounded = this.blockedDown(terrain, this.x, this.y + 1);
-    const groundMat = this.grounded ? this.groundMaterial(terrain) : CONFIG.MAT_AIR;
+    // Inside a gravity anomaly, "down" is up: the ceiling becomes the floor
+    const field = WORLD_ENV.gravityAt(this.x, this.y);
+    this.upsideDown = field < 0;
+    this.grounded = this.upsideDown ? this.blockedUp(terrain, this.x, this.y - 1) : this.blockedDown(terrain, this.x, this.y + 1);
+    const groundMat = this.grounded && !this.upsideDown ? this.groundMaterial(terrain) : CONFIG.MAT_AIR;
     const inFluid = terrain.fluidAt(this.x, this.y) !== 0;
     // Liquids: strong buoyancy, the wizard sinks slowly
-    const g = CONFIG.GRAVITY * this.rules.gravity * (inFluid ? 0.2 : 1) * WORLD_ENV.gravityAt(this.x, this.y);
+    const g = CONFIG.GRAVITY * this.rules.gravity * (inFluid ? 0.2 : 1) * field;
+    /** -1 = jumping goes up (normal), +1 = jumping goes down (upside down) */
+    const jumpDir = this.upsideDown ? 1 : -1;
     if (this.portalCooldown > 0) this.portalCooldown--;
 
     if (this.sheepTimer > 0) this.sheepTimer--;
@@ -320,9 +336,18 @@ export class Worm {
       else if (moveDir === 0) this.vx *= 0.96;
     }
 
+    // Variable jump: a tap is a small hop, holding the key keeps pushing for a higher jump
     if (input.jump && this.grounded && !attached) {
-      this.vy = -CONFIG.WORM_JUMP_FORCE * this.rules.jump * (sheep ? 1.3 : 1) * Math.sign(g || 1);
+      this.vy = jumpDir * CONFIG.WORM_JUMP_FORCE * JUMP_TAP * this.rules.jump * (sheep ? 1.3 : 1);
       this.grounded = false;
+      this.jumpHold = JUMP_HOLD_TICKS;
+    } else if (this.jumpHold > 0) {
+      if (input.jump && !attached && !inFluid && this.vy * jumpDir > 0) {
+        this.vy -= g * JUMP_HOLD_LIFT;
+        this.jumpHold--;
+      } else {
+        this.jumpHold = 0;
+      }
     }
 
     this.rope.update(this.x, this.y, terrain, attached && (input.up || input.jump), attached && input.down, playSounds);
@@ -348,7 +373,7 @@ export class Worm {
   }
 
   private applyGravity(g: number) {
-    if (this.grounded && this.vy >= 0 && g >= 0) {
+    if (this.grounded && this.vy * Math.sign(g || 1) >= 0) {
       // Resting on the ground. Upward velocity (jump, blast) is left untouched.
       this.vy = 0;
     } else {
@@ -410,18 +435,22 @@ export class Worm {
     if (Math.abs(dx) < 1e-6) return true;
     const dir = dx > 0 ? 1 : -1;
     const targetX = this.x + dx;
+    // Upside down (gravity anomaly), the "floor" is the ceiling: steps are climbed downwards
+    const lift = this.upsideDown ? 1 : -1;
+    const onFloor = (x: number, y: number) => (this.upsideDown ? this.blockedUp(t, x, y) : this.blockedDown(t, x, y));
+    const head = (x: number, y: number) => (this.upsideDown ? this.blockedDown(t, x, y) : this.blockedUp(t, x, y));
     if (!this.blockedSide(t, targetX, this.y, dir)) {
       this.x = targetX;
       // Small bumps pass under the side probes: lift the feet out of the ground
-      for (let up = 0; up < maxClimb && this.blockedDown(t, this.x, this.y - 0.5); up++) {
-        if (this.blockedUp(t, this.x, this.y - 1)) break;
-        this.y -= 1;
+      for (let k = 0; k < maxClimb && onFloor(this.x, this.y + 0.5 * lift); k++) {
+        if (head(this.x, this.y + lift)) break;
+        this.y += lift;
       }
       return true;
     }
-    for (let up = 1; up <= maxClimb; up++) {
-      const ty = this.y - up;
-      if (!this.blockedSide(t, targetX, ty, dir) && !this.blockedUp(t, targetX, ty)) {
+    for (let k = 1; k <= maxClimb; k++) {
+      const ty = this.y + k * lift;
+      if (!this.blockedSide(t, targetX, ty, dir) && !head(targetX, ty)) {
         this.x = targetX;
         this.y = ty;
         return true;
@@ -467,7 +496,7 @@ export class Worm {
         this.vx = 0;
       }
       // Stick to the ground when walking down a slope
-      if (wasGrounded && !attached && this.vy >= 0 && sx !== 0) {
+      if (wasGrounded && !attached && !this.upsideDown && this.vy >= 0 && sx !== 0) {
         for (let down = 1; down <= 3; down++) {
           if (this.blockedDown(terrain, this.x, this.y + down)) {
             this.y += down - 1;
@@ -476,7 +505,7 @@ export class Worm {
         }
       }
       if (sy !== 0 && !this.moveY(terrain, sy)) {
-        if (sy > 0) this.grounded = true;
+        if ((sy > 0) !== this.upsideDown) this.grounded = true;
         this.vy = 0;
       }
     }
@@ -524,7 +553,7 @@ export class Worm {
     const sinceHurt = now - this.hurtAt;
     const sinceCast = now - this.castAt;
     const speed = Math.abs(this.x - this.prevX);
-    const onGround = this.grounded || this.blockedDown(terrain, this.x, this.y + 1.5);
+    const onGround = this.grounded || (this.upsideDown ? this.blockedUp(terrain, this.x, this.y - 1.5) : this.blockedDown(terrain, this.x, this.y + 1.5));
     const pose = this.pose;
     if (now - this.shockedAt < 150) {
       // Electrocuted: convulsions
@@ -543,7 +572,7 @@ export class Worm {
       pose.frame = 2 + Math.floor((sinceCast / 250) * 5);
     } else if (!onGround && this.rope.state !== 'attached') {
       pose.anim = 'run';
-      pose.frame = this.vy < 0 ? 4 : 10; // legs apart
+      pose.frame = this.vy * (this.upsideDown ? -1 : 1) < 0 ? 4 : 10; // legs apart
     } else if (onGround && speed > 0.12) {
       this.runPhase += dt * (0.004 + Math.min(speed, 2) * 0.008);
       pose.anim = 'run';
@@ -591,6 +620,15 @@ export class Worm {
 
     this.rope.draw(ctx, px, py);
 
+    // In a gravity anomaly the wizard stands on the ceiling: drawn upside down
+    const flip = WORLD_ENV.gravityAt(px, py) < 0;
+    const up = flip ? -1 : 1;
+    ctx.save();
+    if (flip) {
+      ctx.translate(0, 2 * py);
+      ctx.scale(1, -1);
+    }
+
     // Wizard (or sheep)
     const footY = py + WIZARD_FOOT;
     const shocked = now - this.shockedAt < 150;
@@ -628,6 +666,7 @@ export class Worm {
       ctx.stroke();
       ctx.restore();
     }
+    ctx.restore(); // end of the upside-down part
 
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
@@ -636,7 +675,7 @@ export class Worm {
     if (!sheep) {
       const casting = this.shotCooldown > 0 || now - this.castAt < 200;
       const ox = px + f * 1.5 + aimCos * 9;
-      const oy = py - 5 + aimSin * 9;
+      const oy = py - 5 * up + aimSin * 9;
       const pulse = 0.85 + 0.15 * Math.sin(now * 0.008);
       drawFx(ctx, 'circle_05', ox, oy, (casting ? 15 : 10) * pulse, spellColor, 0.9);
       drawFx(ctx, 'star_04', ox, oy, casting ? 11 : 7, '#ffffff', 0.9, now * 0.002);
@@ -644,32 +683,33 @@ export class Worm {
 
     // Electrocuted: blue glow
     if (shocked) {
-      drawFx(ctx, 'circle_05', px, py - 4, 26, '#6fa8ff', 0.55 + Math.random() * 0.3);
-      drawFx(ctx, Math.random() < 0.5 ? 'spark_01' : 'spark_02', px, py - 4, 22, '#dff0ff', 0.8, Math.random() * 6.3);
+      drawFx(ctx, 'circle_05', px, py - 4 * up, 26, '#6fa8ff', 0.55 + Math.random() * 0.3);
+      drawFx(ctx, Math.random() < 0.5 ? 'spark_01' : 'spark_02', px, py - 4 * up, 22, '#dff0ff', 0.8, Math.random() * 6.3);
     }
 
     // Drunk: little stars spinning around the head
     if (this.drunkTimer > 0) {
       for (let k = 0; k < 3; k++) {
         const a = now * 0.005 + (k * Math.PI * 2) / 3;
-        drawFx(ctx, 'star_04', px + Math.cos(a) * 6, footY - (sheep ? 12 : WIZARD_HEIGHT) - 1 + Math.sin(a) * 1.8, 6, '#ffe36b', 0.95, a);
+        const headY = py + up * (WIZARD_FOOT - (sheep ? 12 : WIZARD_HEIGHT) - 1);
+        drawFx(ctx, 'star_04', px + Math.cos(a) * 6, headY + Math.sin(a) * 1.8, 6, '#ffe36b', 0.95, a);
       }
     }
 
     // Bubble: soap bubble around the wizard
     if (this.bubbleTimer > 0) {
       const wob = Math.sin(now * 0.01) * 0.8;
-      drawFx(ctx, 'light_01', px, py - 4, 30 + wob, '#bfe8ff', 0.35, now * 0.0008);
-      drawFx(ctx, 'circle_02', px, py - 4, 29 - wob, '#e6f7ff', 0.7);
-      drawFx(ctx, 'circle_05', px - 5, py - 11, 5, '#ffffff', 0.8);
+      drawFx(ctx, 'light_01', px, py - 4 * up, 30 + wob, '#bfe8ff', 0.35, now * 0.0008);
+      drawFx(ctx, 'circle_02', px, py - 4 * up, 29 - wob, '#e6f7ff', 0.7);
+      drawFx(ctx, 'circle_05', px - 5, py - 11 * up, 5, '#ffffff', 0.8);
     }
 
     // Mirror shield bubble
     if (this.shieldTimer > 0) {
       const fading = this.shieldTimer < 40 && Math.floor(this.shieldTimer / 5) % 2 === 0;
       const a = fading ? 0.35 : 0.8;
-      drawFx(ctx, 'light_01', px, py - 4, 34, '#7fd4ff', a * 0.45, now * 0.001);
-      drawFx(ctx, 'circle_02', px, py - 4, 30 + Math.sin(this.animTimer * 0.2), '#a8e6ff', a);
+      drawFx(ctx, 'light_01', px, py - 4 * up, 34, '#7fd4ff', a * 0.45, now * 0.001);
+      drawFx(ctx, 'circle_02', px, py - 4 * up, 30 + Math.sin(this.animTimer * 0.2), '#a8e6ff', a);
     }
     ctx.restore();
 
@@ -694,7 +734,10 @@ export class Worm {
 
     // Health bar
     const barWidth = 20;
-    const barY = footY - (sheep ? 12 : WIZARD_HEIGHT) - 5;
+    // Above the head — below it when upside down
+    const headSpan = (sheep ? 12 : WIZARD_HEIGHT) - WIZARD_FOOT;
+    const barY = flip ? py + headSpan + 3 : footY - (sheep ? 12 : WIZARD_HEIGHT) - 5;
+    const nameY = flip ? barY + 8 : barY - 2;
     const hpRatio = Math.max(0, Math.min(1, this.health / this.maxHealth));
     ctx.fillStyle = 'rgba(15, 10, 8, 0.75)';
     ctx.fillRect(px - barWidth / 2 - 0.75, barY - 0.75, barWidth + 1.5, 3.5);
@@ -706,9 +749,9 @@ export class Worm {
     ctx.textAlign = 'center';
     ctx.lineWidth = 1.6;
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
-    ctx.strokeText(this.name, px, barY - 2);
+    ctx.strokeText(this.name, px, nameY);
     ctx.fillStyle = '#ffecb3';
-    ctx.fillText(this.name, px, barY - 2);
+    ctx.fillText(this.name, px, nameY);
   }
 
   /** A fluffy sheep (with a ribbon in the player's colour) standing on (x, footY). */

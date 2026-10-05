@@ -12,8 +12,7 @@ const MAPS: Record<MapType, { name: string; icon: string; desc: string }> = {
   glacier: { name: 'Glacier', icon: '🏔️', desc: 'Pentes de glace glissantes, lacs gelés et grottes de glace.' },
   sky: { name: 'Archipel', icon: '☁️', desc: 'Îles flottantes au-dessus de l\'océan : grappin indispensable.' },
   desert: { name: 'Pyramide', icon: '🏜️', desc: 'Dunes de sable qui s\'effondrent dans les grottes, pyramide au tombeau piégé, oasis.' },
-  mine: { name: 'Mine', icon: '⛏️', desc: 'Galeries étayées sur 4 niveaux, barils de poudre explosive et filons de cristal.' },
-  hourglass: { name: 'Sablier', icon: '⏳', desc: 'Un sablier géant : brise le goulot de cristal et le sable dégringole.' }
+  mine: { name: 'Mine', icon: '⛏️', desc: 'Galeries étayées sur 4 niveaux, barils de poudre explosive et filons de cristal.' }
 };
 
 const MODES: { id: GameMode; name: string; desc: string }[] = [
