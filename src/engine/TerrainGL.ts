@@ -22,7 +22,7 @@ export interface TerrainView {
   time: number;     // animation ticks
 }
 
-// Mask channels: tex0 = dirt, rock, ice, crystal · tex1 = wood, mushroom, acid, water · tex2 = lava, sand, powder
+// Mask channels: tex0 = dirt, rock, ice, crystal · tex1 = wood, mushroom, acid, water · tex2 = lava, sand, powder, obsidian
 const CHANNEL: Record<number, [number, number]> = {
   [CONFIG.MAT_DIRT]: [0, 0],
   [CONFIG.MAT_ROCK]: [0, 1],
@@ -34,7 +34,8 @@ const CHANNEL: Record<number, [number, number]> = {
   [CONFIG.MAT_WATER]: [1, 3],
   [CONFIG.MAT_LAVA]: [2, 0],
   [CONFIG.MAT_SAND]: [2, 1],
-  [CONFIG.MAT_POWDER]: [2, 2]
+  [CONFIG.MAT_POWDER]: [2, 2],
+  [CONFIG.MAT_OBSIDIAN]: [2, 3]
 };
 
 const VERTEX = `#version 300 es
@@ -75,11 +76,12 @@ float solidAt(vec2 uv) {
   vec4 a = texture(uMask0, uv);
   vec4 b = texture(uMask1, uv);
   vec4 c = texture(uMask2, uv);
-  return clamp(a.r + a.g + a.b + a.a + b.r + b.g + b.b + c.g + c.b, 0.0, 1.0);
+  return clamp(a.r + a.g + a.b + a.a + b.r + b.g + c.g + c.b + c.a, 0.0, 1.0);
 }
 
 float liquidAt(vec2 uv) {
-  return clamp(texture(uMask1, uv).a + texture(uMask2, uv).r, 0.0, 1.0);
+  vec4 b = texture(uMask1, uv);
+  return clamp(b.a + b.b + texture(uMask2, uv).r, 0.0, 1.0);
 }
 
 void main() {
@@ -97,8 +99,8 @@ void main() {
     if (outside) { outColor = vec4(0.0); return; }
     vec4 m1 = clamp(smoothMask(uMask1, uv), 0.0, 1.0);
     vec4 m2 = clamp(smoothMask(uMask2, uv), 0.0, 1.0);
-    float water = m1.a, lava = m2.r;
-    float total = clamp(water + lava, 0.0, 1.0);
+    float water = m1.a, lava = m2.r, acid = m1.b;
+    float total = clamp(water + lava + acid, 0.0, 1.0);
     float fw = max(fwidth(total), 0.02);
     float alpha = smoothstep(0.5 - fw, 0.5 + fw, total);
     if (alpha <= 0.0) { outColor = vec4(0.0); return; }
@@ -109,9 +111,14 @@ void main() {
     float flow = texture(uNoise, world / 90.0 + vec2(uTime * 0.0015, uTime * 0.0008)).r;
     vec3 lcol = mix(vec3(0.85, 0.18, 0.02), vec3(1.0, 0.72, 0.15), smoothstep(0.35, 0.8, flow + N.a * 0.3));
     lcol = mix(lcol, vec3(1.0, 0.95, 0.55), surface * 0.8);
-    float lw = lava / max(total, 0.001);
-    vec3 col = mix(wcol, lcol, lw);
-    float a = alpha * mix(0.62 + surface * 0.3, 0.97, lw);
+    // Acid: glowing green, bubbles rising, a bright foamy surface
+    float bubble = smoothstep(0.82, 0.95, texture(uNoise, world / 23.0 + vec2(0.0, uTime * 0.004)).a);
+    vec3 acol = mix(vec3(0.10, 0.62, 0.08), vec3(0.42, 0.98, 0.18), N.g * 0.5 + wave * 0.3 + 0.12 * sin(uTime * 0.07));
+    acol = mix(acol + bubble * 0.3, vec3(0.80, 1.0, 0.55), surface * 0.75);
+    float sum = max(water + lava + acid, 0.001);
+    float lw = lava / sum, aw = acid / sum, ww = water / sum;
+    vec3 col = wcol * ww + lcol * lw + acol * aw;
+    float a = alpha * ((0.62 + surface * 0.3) * ww + 0.97 * lw + (0.82 + surface * 0.12) * aw);
     outColor = vec4(col * a, a);
     return;
   }
@@ -124,18 +131,18 @@ void main() {
   vec4 m1 = clamp(smoothMask(uMask1, uv), 0.0, 1.0);
   vec4 m2 = clamp(smoothMask(uMask2, uv), 0.0, 1.0);
   float dirt = m0.r, rock = m0.g, ice = m0.b, crystal = m0.a;
-  float wood = m1.r, bounce = m1.g, acid = m1.b;
-  float sand = m2.g, powder = m2.b;
-  float total = clamp(dirt + rock + ice + crystal + wood + bounce + acid + sand + powder, 0.0, 1.0);
+  float wood = m1.r, bounce = m1.g;
+  float sand = m2.g, powder = m2.b, obsidian = m2.a;
+  float total = clamp(dirt + rock + ice + crystal + wood + bounce + sand + powder + obsidian, 0.0, 1.0);
   float fw = max(fwidth(total), 0.02);
   float alpha = smoothstep(0.5 - fw, 0.5 + fw, total);
   if (alpha <= 0.0) { outColor = vec4(bg, 1.0); return; }
 
   // Sharpened soft-max between materials: smooth but crisp borders
   float wd = pow(dirt, 6.0), wr = pow(rock, 6.0), wi = pow(ice, 6.0), wc = pow(crystal, 6.0);
-  float ww = pow(wood, 6.0), wb = pow(bounce, 6.0), wa = pow(acid, 6.0);
+  float ww = pow(wood, 6.0), wb = pow(bounce, 6.0), wo = pow(obsidian, 6.0);
   float ws = pow(sand, 6.0), wp = pow(powder, 6.0);
-  float wsum = wd + wr + wi + wc + ww + wb + wa + ws + wp + 1e-5;
+  float wsum = wd + wr + wi + wc + ww + wb + wo + ws + wp + 1e-5;
 
   vec3 col = vec3(0.0);
   float above = solidAt(uv - vec2(0.0, 2.2) * texel);
@@ -187,11 +194,12 @@ void main() {
     vec3 c = mix(vec3(0.86, 0.26, 0.60), vec3(1.0, 0.88, 0.94), spot) * (0.9 + 0.15 * exposedTop);
     col += c * wb;
   }
-  if (wa > 0.0005) {
-    float pulse = 0.75 + 0.25 * sin(uTime * 0.08);
-    float bubble = smoothstep(0.85, 0.95, texture(uNoise, world / 40.0 + vec2(0.0, uTime * 0.002)).a);
-    vec3 c = vec3(0.10, 0.85, 0.12) * pulse * (0.85 + 0.2 * N.g) + bubble * 0.25;
-    col += c * wa;
+  if (wo > 0.0005) {
+    // Obsidian: black glass, purple sheen, sharp glints
+    float sheen = smoothstep(0.55, 0.9, N.b * 0.6 + F.g * 0.5);
+    vec3 c = vec3(0.10, 0.07, 0.14) * (0.8 + 0.3 * N.r) + vec3(0.30, 0.16, 0.42) * sheen * 0.5;
+    c += vec3(0.85, 0.75, 1.0) * pow(F.a, 12.0) * 0.8 + exposedTop * 0.08;
+    col += c * wo;
   }
   if (ws > 0.0005) {
     // Sand: fine grain and wind ripples
@@ -366,10 +374,13 @@ export class TerrainGL {
       return;
     }
 
-    // Re-upload only the rectangles touched by explosions since the last frame
-    const changed = t.changes.since(this.changeSeq);
-    this.changeSeq = t.changes.seq;
-    if (changed) this.uploadMasks(t, changed === 'all' ? { x0: 0, y0: 0, x1: W - 1, y1: H - 1 } : changed);
+    // Re-upload only the rectangles changed since the last frame (explosions, flowing materials)
+    if (this.changeSeq !== t.changes.seq) {
+      const changed = t.changes.listSince(this.changeSeq, 4);
+      this.changeSeq = t.changes.seq;
+      if (changed === 'all') this.uploadMasks(t, { x0: 0, y0: 0, x1: W - 1, y1: H - 1 });
+      else for (const r of changed) this.uploadMasks(t, r);
+    }
 
     if (this.pass === 'solid') {
       const stained = t.stains.listSince(this.stainSeq);
@@ -422,7 +433,7 @@ export class TerrainGL {
         const p = i * 4;
         a[p] = a[p + 1] = a[p + 2] = a[p + 3] = 0;
         b[p] = b[p + 1] = b[p + 2] = b[p + 3] = 0;
-        c[p] = c[p + 1] = c[p + 2] = 0;
+        c[p] = c[p + 1] = c[p + 2] = c[p + 3] = 0;
         const ch = CHANNEL[t.materials[i]];
         if (ch) data[ch[0]][p + ch[1]] = 255;
       }

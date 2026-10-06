@@ -454,6 +454,11 @@ export class SoundEffects {
     this.noise('bandpass', 3000, 900, 1.4, 0.18, 0.8);
   }
 
+  /** Lava meeting water: a short hiss of steam (louder = more pixels reacting) */
+  public playSizzle(amount = 1) {
+    this.noise('highpass', 5000, 1800, 0.35 + Math.min(0.5, amount * 0.02), Math.min(0.16, 0.05 + amount * 0.006), 0.6);
+  }
+
   public playSpellForWeapon(weaponId: string) {
     if (!this.enabled) return;
     this.initCtx();

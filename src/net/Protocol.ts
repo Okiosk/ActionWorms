@@ -83,7 +83,6 @@ export type NetEvent =
   | { t: 'line'; x0: number; y0: number; x1: number; y1: number; r: number; f?: 1 }
   | { t: 'ice'; x: number; y: number; r: number }
   | { t: 'boom'; x: number; y: number; r: number; c?: string; f?: 1 }   // f = fire spell (flames)
-  | { t: 'acid'; x: number; y: number; r: number }
   | { t: 'blood'; x: number; y: number; n: number; dx?: number; dy?: number }   // (dx, dy) = hit direction
   | { t: 'shot'; id: string; w: WeaponId }
   | { t: 'fill'; x: number; y: number; r: number; keep: number[] }
@@ -104,11 +103,19 @@ export type NetMessage =
       type: 'START_MATCH';
       players: LobbyPlayerInfo[];
       modifiers: MatchModifiers;
-      terrain?: Uint8Array; // RLE snapshot, only sent to players joining a match in progress
+      terrain?: Uint8Array; // RLE snapshot, only sent to players joining a match in progress…
+      awake?: Uint8Array;   // …with the flowing materials' awake chunks…
+      ft?: number;          // …and the tick of the automaton it was taken at
     }
   | { type: 'SELECT_WEAPON'; weaponId: WeaponId }
   | { type: 'INPUT'; seq: number; input: WormInput }
-  | { type: 'STATE'; worms: WormNetState[]; projectiles: ProjectileNetState[]; events: NetEvent[]; teamScores: number[]; wind?: number }
+  | {
+      type: 'STATE'; worms: WormNetState[]; projectiles: ProjectileNetState[]; events: NetEvent[]; teamScores: number[]; wind?: number;
+      ft: number;   // tick of the flowing materials: the client steps them once, after the events
+      th?: number;  // every second: fingerprint of the terrain after that step
+    }
+  | { type: 'RESYNC' }   // client → host: my terrain differs from yours
+  | { type: 'TERRAIN'; terrain: Uint8Array; awake: Uint8Array; ft: number }   // host → client: here is mine
   | { type: 'MATCH_OVER'; winnerId: string; winnerTeam: number }
   | { type: 'RETURN_TO_LOBBY' }
   | { type: 'PING'; time: number }

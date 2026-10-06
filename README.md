@@ -68,15 +68,24 @@ Aucun serveur de jeu : l'hôte simule la partie et l'envoie aux autres joueurs 6
 |---|---|
 | Terre | Destructible |
 | Roche | Indestructible |
-| Acide | Ronge les sorciers qui marchent dessus |
+| 🧪 Acide | Liquide qui **ronge** les sorciers qui y tombent, et dissout lentement la terre, le sable et le bois autour de lui |
 | 🧊 Glace | Destructible et **glissante** |
 | 💧 Eau | Ralentit tout, on y nage (saut pour en sortir), éteint le feu ; l'Orbe de Givre la gèle |
-| 🌋 Lave | Liquide qui **enflamme** et blesse |
+| 🌋 Lave | Liquide épais qui **enflamme** et blesse ; brûle le bois, fait fondre la glace |
+| 🖤 Obsidienne | Se forme quand la lave touche l'eau (avec un nuage de vapeur) ; destructible |
 | 💎 Cristal | Destructible ; le faire exploser **rapporte de l'or** |
 | 🪵 Bois | Résiste aux explosions, mais les sorts de **feu** le brûlent entièrement |
 | 🍄 Champignon | Trampoline : fait rebondir les sorciers (saut = plus haut) et renvoie les sorts |
-| 🏖️ Sable | Destructible ; **s'effondre** quand plus rien ne le tient (il coule en tas, s'enfonce dans l'eau) |
+| 🏖️ Sable | Destructible ; **s'écoule** quand plus rien ne le tient (il forme des tas, s'enfonce dans les liquides) |
 | 🧨 Poudre explosive | Destructible ; une explosion ou une flamme la fait **sauter en chaîne** |
+
+### Écoulements
+
+Le sable, l'eau, l'acide et la lave **s'écoulent vraiment** : un trou sous un lac le vide en cascade, une dune percée s'effondre grain par grain, l'acide creuse peu à peu son chemin et la lave avance lentement. Les liquides se rangent par densité (eau < acide < lave), et le sable coule au fond de tout.
+
+Côté réseau, rien de plus ne transite : la simulation est **déterministe** (entiers seulement, pas de hasard du navigateur, ordre de calcul fixe) et avance d'exactement un pas par tick de l'hôte, chez l'hôte comme chez chaque joueur, juste après les explosions de ce tick. Chaque seconde, l'hôte envoie une empreinte du terrain ; si un joueur ne trouve pas la même, il redemande une copie du terrain à l'hôte. Les joueurs qui arrivent en cours de partie reçoivent aussi cet état.
+
+Côté performances, la carte est découpée en blocs de 32×32 pixels et seuls les blocs où quelque chose bouge sont calculés : un lac au repos ne coûte rien. En pleine inondation, un pas prend moins d'une milliseconde en moyenne.
 
 ## Graphismes
 
@@ -150,6 +159,7 @@ Ouvre l'URL locale dans plusieurs onglets pour tester le multijoueur. Le déploi
 - `src/engine/Mutators.ts` — liste des mutateurs et règles qui en découlent
 - `src/engine/Env.ts` — forces du monde partagées (anomalies de gravité, vent)
 - `src/engine/Terrain.ts` — terrain destructible multi-matériaux (et rendu pixel de secours)
+- `src/engine/Fluids.ts` — écoulement du sable et des liquides (automate déterministe, synchronisé par ticks)
 - `src/engine/TerrainGL.ts` — rendu lisse du terrain en WebGL2 (shader)
 - `src/engine/MapGenerator.ts` — génération des 6 cartes
 - `src/net/` — connexion PeerJS et format des messages

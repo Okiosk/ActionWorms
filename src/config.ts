@@ -29,7 +29,7 @@ export const CONFIG = {
   MAT_AIR: 0,
   MAT_DIRT: 1,     // destructible
   MAT_ROCK: 2,     // indestructible
-  MAT_ACID: 3,     // solid, corrodes wizards standing on it
+  MAT_ACID: 3,     // liquid: burns wizards, slowly eats soft materials
   MAT_ICE: 4,      // destructible, slippery
   MAT_WATER: 5,    // liquid: slows everything, puts out fire, freezes into ice
   MAT_CRYSTAL: 6,  // destructible, breaking it gives gold
@@ -38,6 +38,7 @@ export const CONFIG = {
   MAT_BOUNCE: 9,   // giant mushroom: bounces wizards and spells
   MAT_SAND: 10,    // destructible, collapses when nothing holds it up
   MAT_POWDER: 11,  // blasting powder: blows up when an explosion or a fire reaches it
+  MAT_OBSIDIAN: 12, // lava cooled by water: hard dark glass (destructible)
   BOUNCE_FORCE: 5.0,
   BOUNCE_JUMP_FORCE: 6.2,
 

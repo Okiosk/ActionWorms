@@ -1,16 +1,17 @@
 import { CONFIG } from '../config';
 import { generateLayout, MapTheme, MapType, MAP_THEMES } from './MapGenerator';
 import { fxSprite, FxName } from './Sprites';
+import { FluidSim, CHUNK } from './Fluids';
 
 export type { MapType };
 
 const { MAT_AIR: AIR, MAT_DIRT: DIRT, MAT_ROCK: ROCK, MAT_ACID: ACID, MAT_ICE: ICE, MAT_WATER: WATER,
-  MAT_CRYSTAL: CRYSTAL, MAT_WOOD: WOOD, MAT_LAVA: LAVA, MAT_BOUNCE: BOUNCE, MAT_SAND: SAND, MAT_POWDER: POWDER } = CONFIG;
+  MAT_CRYSTAL: CRYSTAL, MAT_WOOD: WOOD, MAT_LAVA: LAVA, MAT_BOUNCE: BOUNCE, MAT_SAND: SAND, MAT_POWDER: POWDER, MAT_OBSIDIAN: OBSIDIAN } = CONFIG;
 
 /** Materials removed by explosions (wood only partially, unless the spell is a fire spell) */
-const DESTRUCTIBLE = new Set([DIRT, ICE, CRYSTAL, WOOD, BOUNCE, SAND, POWDER]);
-/** Cells sand can fall through */
-const FREE = (m: number) => m === AIR || m === WATER || m === LAVA;
+const DESTRUCTIBLE = new Set([DIRT, ICE, CRYSTAL, WOOD, BOUNCE, SAND, POWDER, OBSIDIAN]);
+/** Air and liquids: what wizards, spells and sand go through */
+const FREE = (m: number) => m === AIR || m === WATER || m === LAVA || m === ACID;
 /** Blood decal colours and splat shapes */
 const BLOOD_STAIN = ['#7d0a0a', '#640606', '#931010'];
 const SPLATS: FxName[] = ['dirt_01', 'dirt_02', 'dirt_03'];
@@ -29,13 +30,15 @@ type RGB = [number, number, number];
 /**
  * Destructible pixel terrain.
  *
- * Layers (offscreen canvases, blitted each frame):
+ * Sand, water, acid and lava flow (see Fluids.ts — deterministic, stepped once per host tick).
+ *
+ * Layers (offscreen canvases, used by the 2D renderer and the lobby preview):
  *  - background : sky gradient and scenery (never changes)
- *  - ground     : destructible solids (dirt, ice, crystal, wood, mushroom)
+ *  - ground     : destructible solids (dirt, ice, crystal, wood, mushroom, sand…)
  *  - rock       : indestructible rock
- *  - acid       : acid (pulsing)
- *  - liquid     : water & lava, drawn over the wizards so they look submerged
+ *  - liquid     : water, acid & lava, drawn over the wizards so they look submerged
  *  - stains     : blood decals, always restricted to solid pixels
+ * They are repainted lazily (flushRender), only when the 2D renderer actually draws.
  */
 export class Terrain {
   public width: number;
@@ -51,8 +54,6 @@ export class Terrain {
   private groundCtx: CanvasRenderingContext2D;
   private rockCanvas: HTMLCanvasElement;
   private rockCtx: CanvasRenderingContext2D;
-  private acidCanvas: HTMLCanvasElement;
-  private acidCtx: CanvasRenderingContext2D;
   private liquidCanvas: HTMLCanvasElement;
   private liquidCtx: CanvasRenderingContext2D;
 
@@ -67,8 +68,15 @@ export class Terrain {
   /** Regions where materials changed / blood was added, in order */
   public readonly changes = new ChangeLog();
   public readonly stains = new ChangeLog();
-  /** Called when sand collapsed (rectangle that moved), for dust effects */
-  public onSandFall: ((x0: number, y0: number, x1: number, y1: number) => void) | null = null;
+  /** Flowing materials (lockstep with the host's ticks) */
+  public readonly fluids: FluidSim;
+  private readonly pushChange = (x0: number, y0: number, x1: number, y1: number) => this.changes.push({ x0, y0, x1, y1 });
+  // Lazy repaint of the 2D layers / blood clean-up (positions in `changes`)
+  private paintSeq = 0;
+  private paintStale = false;
+  private stainSeq = 0;
+  /** Chunks (32×32) that may hold blood, so clean-ups skip the others */
+  private stainChunks: Uint8Array;
 
   constructor(width: number = CONFIG.MAP_WIDTH, height: number = CONFIG.MAP_HEIGHT) {
     this.width = width;
@@ -87,11 +95,11 @@ export class Terrain {
     this.stainCtx = this.stainCanvas.getContext('2d', { willReadFrequently: true })!;
     this.groundCanvas = layer();
     this.rockCanvas = layer();
-    this.acidCanvas = layer();
     this.liquidCanvas = layer();
     this.groundCtx = this.groundCanvas.getContext('2d', { willReadFrequently: true })!;
     this.rockCtx = this.rockCanvas.getContext('2d')!;
-    this.acidCtx = this.acidCanvas.getContext('2d', { willReadFrequently: true })!;
+    this.fluids = new FluidSim(this.materials, width, height);
+    this.stainChunks = new Uint8Array(Math.ceil(width / CHUNK) * Math.ceil(height / CHUNK));
     this.liquidCtx = this.liquidCanvas.getContext('2d', { willReadFrequently: true })!;
   }
 
@@ -129,7 +137,8 @@ export class Terrain {
       }
     }
 
-    this.settleSand(0, this.width - 1, false);
+    this.settleSand();
+    this.fluids.reset();
     this.renderAll(rand);
   }
 
@@ -151,19 +160,18 @@ export class Terrain {
 
   /** Anything a wizard cannot go through (liquids are not solid). */
   public isSolid(x: number, y: number): boolean {
-    const m = this.materialAt(x, y);
-    return m !== AIR && m !== WATER && m !== LAVA;
+    return !FREE(this.materialAt(x, y));
   }
 
   public isAcid(x: number, y: number): boolean {
     return this.isInBounds(x, y) && this.materialAt(x, y) === ACID;
   }
 
-  /** WATER, LAVA, or 0 when not in a liquid. */
+  /** WATER, LAVA, ACID, or 0 when not in a liquid. */
   public fluidAt(x: number, y: number): number {
     if (!this.isInBounds(x, y)) return 0;
     const m = this.materialAt(x, y);
-    return m === WATER || m === LAVA ? m : 0;
+    return m === WATER || m === LAVA || m === ACID ? m : 0;
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -197,7 +205,6 @@ export class Terrain {
     const result: CarveResult = { modified: false, crystals: 0, powder: [] };
     if (minX > maxX || minY > maxY) return result;
 
-    const changed: number[] = [];
     for (let y = minY; y <= maxY; y++) {
       for (let x = minX; x <= maxX; x++) {
         const idx = y * this.width + x;
@@ -209,52 +216,33 @@ export class Terrain {
         if (m === CRYSTAL) result.crystals++;
         else if (m === POWDER) result.powder.push(x, y);
         this.materials[idx] = AIR;
-        changed.push(x, y);
+        result.modified = true;
       }
     }
-    if (changed.length > 0) {
-      result.modified = true;
-      this.markDirty(minX, minY, maxX, maxY);
-      const w = maxX - minX + 1;
-      const img = this.groundCtx.getImageData(minX, minY, w, maxY - minY + 1);
-      for (let i = 0; i < changed.length; i += 2) {
-        img.data[((changed[i + 1] - minY) * w + (changed[i] - minX)) * 4 + 3] = 0;
-      }
-      this.groundCtx.putImageData(img, minX, minY);
-      this.clearStains(changed, minX, minY, maxX, maxY);
-      this.settleSand(minX, maxX, true);
-    }
+    // What was resting on it will fall / flow at the next steps of the automaton
+    if (result.modified) this.touch(minX, minY, maxX, maxY);
     return result;
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // Sand: falls straight down, then slides sideways into 45° piles.
-  // Pure function of the grid → identical for every player (runs inside the carve).
+  // Generation only: sand settles instantly into its piles (the same rules as the
+  // automaton, run to rest), so maps start still.
   // ══════════════════════════════════════════════════════════════════════════
 
-  private settleSand(x0: number, x1: number, repaint: boolean) {
+  private settleSand() {
     const W = this.width;
     const H = this.height;
     const m = this.materials;
-    let bx0 = W, by0 = H, bx1 = -1, by1 = -1;
-    const touch = (x: number, y: number) => {
-      if (x < bx0) bx0 = x;
-      if (x > bx1) bx1 = x;
-      if (y < by0) by0 = y;
-      if (y > by1) by1 = y;
-    };
-    // Only the columns where something may still move are scanned
-    let active = new Uint8Array(W);
-    for (let x = Math.max(1, x0 - 1); x <= Math.min(W - 2, x1 + 1); x++) active[x] = 1;
+    let active = new Uint8Array(W).fill(1);
     for (let iter = 0; iter < 200; iter++) {
       const cols: number[] = [];
       for (let x = 1; x < W - 1; x++) if (active[x]) cols.push(x);
       if (cols.length === 0) break;
       const next = new Uint8Array(W);
       const wake = (x: number) => {
-        if (x > 0) next[x - 1] = 1;
+        next[x - 1] = 1;
         next[x] = 1;
-        if (x < W - 1) next[x + 1] = 1;
+        next[x + 1] = 1;
       };
       // 1. Columns collapse
       for (const x of cols) {
@@ -268,8 +256,6 @@ export class Terrain {
             const j = empty * W + x;
             m[i] = m[j];
             m[j] = SAND;
-            touch(x, y);
-            touch(x, empty);
             empty--;
             wake(x);
           } else {
@@ -278,9 +264,8 @@ export class Terrain {
         }
       }
       // 2. Grains on a steep edge slide down one step diagonally
-      const leftFirst = iter % 2 === 0;
-      if (!leftFirst) cols.reverse();
-      const dirs = leftFirst ? [-1, 1] : [1, -1];
+      const dirs = iter % 2 === 0 ? [-1, 1] : [1, -1];
+      if (iter % 2 === 1) cols.reverse();
       for (let y = H - 3; y >= 1; y--) {
         for (const x of cols) {
           const i = y * W + x;
@@ -292,8 +277,6 @@ export class Terrain {
               const j = i + W + d;
               m[i] = m[j];
               m[j] = SAND;
-              touch(x, y);
-              touch(nx, y + 1);
               wake(x);
               wake(nx);
               break;
@@ -303,55 +286,23 @@ export class Terrain {
       }
       active = next;
     }
-    if (bx1 < 0 || !repaint) return;
-    this.repaintRect(bx0, by0, bx1, by1);
-    this.onSandFall?.(bx0, by0, bx1, by1);
   }
 
-  /** Repaints every non-rock layer of a rectangle from the material grid. */
-  private repaintRect(x0: number, y0: number, x1: number, y1: number) {
-    const W = this.width;
-    const w = x1 - x0 + 1;
-    const h = y1 - y0 + 1;
-    const ground = this.groundCtx.getImageData(x0, y0, w, h);
-    const acid = this.acidCtx.getImageData(x0, y0, w, h);
-    const liquid = this.liquidCtx.getImageData(x0, y0, w, h);
-    const changed: number[] = [];
-    for (let y = y0; y <= y1; y++) {
-      for (let x = x0; x <= x1; x++) {
-        const p = ((y - y0) * w + (x - x0)) * 4;
-        const mat = this.materials[y * W + x];
-        if (mat === ROCK) continue;
-        ground.data[p + 3] = acid.data[p + 3] = liquid.data[p + 3] = 0;
-        if (mat !== AIR) this.paintPixel(mat, x, y, Math.random, ground.data, acid.data, liquid.data, p);
-        if (mat === AIR || mat === WATER || mat === LAVA) changed.push(x, y);
-      }
-    }
-    this.groundCtx.putImageData(ground, x0, y0);
-    this.acidCtx.putImageData(acid, x0, y0);
-    this.liquidCtx.putImageData(liquid, x0, y0);
-    this.markDirty(x0, y0, x1, y1);
-    if (changed.length) this.clearStains(changed, x0, y0, x1, y1);
+  // ══════════════════════════════════════════════════════════════════════════
+  // Flowing materials (lockstep: host and clients call this once per host tick)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /** One step of sand / water / acid / lava (deterministic). */
+  public stepFluids(tick: number) {
+    this.fluids.step(tick, this.pushChange);
   }
 
-  /** Blood disappears with the pixels it was on (flat [x, y, …] list inside the rect). */
-  private clearStains(pixels: number[], minX: number, minY: number, maxX: number, maxY: number) {
-    const w = maxX - minX + 1;
-    const img = this.stainCtx.getImageData(minX, minY, w, maxY - minY + 1);
-    let any = false;
-    for (let i = 0; i < pixels.length; i += 2) {
-      const a = ((pixels[i + 1] - minY) * w + (pixels[i] - minX)) * 4 + 3;
-      if (img.data[a] !== 0) {
-        img.data[a] = 0;
-        any = true;
-      }
-    }
-    if (!any) return;
-    this.stainCtx.putImageData(img, minX, minY);
-    this.stains.push({ x0: minX, y0: minY, x1: maxX, y1: maxY });
+  /** Fingerprint of the grid, compared between the host and the clients */
+  public fluidHash(): number {
+    return this.fluids.hash();
   }
 
-  /** Runs `fn` on every pixel of a disc (returns the new material or null) and repaints. */
+  /** Runs `fn` on every pixel of a disc (returns the new material or null). */
   private editDisc(cx: number, cy: number, r: number, fn: (idx: number, x: number, y: number) => number | null) {
     cx = Math.round(cx);
     cy = Math.round(cy);
@@ -360,14 +311,8 @@ export class Terrain {
     const maxX = Math.min(this.width - 1, cx + r);
     const minY = Math.max(0, cy - r);
     const maxY = Math.min(this.height - 1, cy + r);
-    const w = maxX - minX + 1;
-    const h = maxY - minY + 1;
-    if (w <= 0 || h <= 0) return;
-
-    const ground = this.groundCtx.getImageData(minX, minY, w, h);
-    const acid = this.acidCtx.getImageData(minX, minY, w, h);
-    const liquid = this.liquidCtx.getImageData(minX, minY, w, h);
-    const changed: number[] = [];
+    if (maxX < minX || maxY < minY) return;
+    let changed = false;
     for (let y = minY; y <= maxY; y++) {
       for (let x = minX; x <= maxX; x++) {
         if ((x - cx) ** 2 + (y - cy) ** 2 > r * r) continue;
@@ -375,34 +320,16 @@ export class Terrain {
         const next = fn(idx, x, y);
         if (next === null || next === this.materials[idx]) continue;
         this.materials[idx] = next;
-        changed.push(x, y);
-        const p = ((y - minY) * w + (x - minX)) * 4;
-        ground.data[p + 3] = 0;
-        acid.data[p + 3] = 0;
-        liquid.data[p + 3] = 0;
-        this.paintPixel(next, x, y, Math.random, ground.data, acid.data, liquid.data, p);
+        changed = true;
       }
     }
-    this.groundCtx.putImageData(ground, minX, minY);
-    this.acidCtx.putImageData(acid, minX, minY);
-    this.liquidCtx.putImageData(liquid, minX, minY);
-    this.markDirty(minX, minY, maxX, maxY);
-    if (changed.length > 0) {
-      this.clearStains(changed, minX, minY, maxX, maxY);
-      this.settleSand(minX, maxX, true);
-    }
+    if (changed) this.touch(minX, minY, maxX, maxY);
   }
 
-  private markDirty(x0: number, y0: number, x1: number, y1: number) {
+  /** Materials of this rectangle changed: renderers repaint it, the automaton looks at it again. */
+  private touch(x0: number, y0: number, x1: number, y1: number) {
     this.changes.push({ x0, y0, x1, y1 });
-  }
-
-  /** Alchemist flask: turns everything but rock and lava into acid. */
-  public addAcid(cx: number, cy: number, r: number) {
-    this.editDisc(cx, cy, r, (idx) => {
-      const m = this.materials[idx];
-      return m === ROCK || m === LAVA ? null : ACID;
-    });
+    this.fluids.wakeRect(x0, y0, x1, y1);
   }
 
   /**
@@ -438,7 +365,7 @@ export class Terrain {
         if (y > y1) y1 = y;
       }
     }
-    if (x1 >= 0) this.repaintRect(x0, y0, x1, y1);
+    if (x1 >= 0) this.touch(x0, y0, x1, y1);
   }
 
   /** Frost orb: water freezes into (walkable, slippery) ice. Returns true if anything froze. */
@@ -490,12 +417,15 @@ export class Terrain {
       for (let px = x0; px <= x1; px++) {
         const a = ((py - y0) * w + (px - x0)) * 4 + 3;
         if (data[a] === 0) continue;
-        const mat = this.materials[py * this.width + px];
-        if (mat === AIR || mat === WATER || mat === LAVA) data[a] = 0;
+        if (FREE(this.materials[py * this.width + px])) data[a] = 0;
       }
     }
     ctx.putImageData(img, x0, y0);
     this.stains.push({ x0, y0, x1, y1 });
+    const cw = Math.ceil(this.width / CHUNK);
+    for (let cy = y0 >> 5; cy <= y1 >> 5; cy++) {
+      for (let cx = x0 >> 5; cx <= x1 >> 5; cx++) this.stainChunks[cy * cw + cx] = 1;
+    }
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -567,14 +497,21 @@ export class Terrain {
     return new Uint8Array(out);
   }
 
-  /** Replaces the material grid (call generateMap first so the theme and scenery are right). */
-  public loadMaterials(rle: Uint8Array) {
+  /**
+   * Replaces the material grid and the automaton's awake chunks (call generateMap first so
+   * the theme and scenery are right). Blood decals are dropped; the scenery is kept.
+   */
+  public loadMaterials(rle: Uint8Array, awake?: Uint8Array) {
     let p = 0;
     for (let i = 0; i + 1 < rle.length && p < this.materials.length; i += 2) {
       this.materials.fill(rle[i], p, Math.min(this.materials.length, p + rle[i + 1]));
       p += rle[i + 1];
     }
-    this.renderAll(Math.random);
+    this.fluids.reset();
+    if (awake) this.fluids.setAwake(awake);
+    this.version++;
+    this.resetLogs();
+    this.repaintLayers(Math.random);
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -582,32 +519,131 @@ export class Terrain {
   // ══════════════════════════════════════════════════════════════════════════
 
   private renderAll(rand: () => number) {
-    const W = this.width;
-    const H = this.height;
     this.version++;
+    this.resetLogs();
+    this.paintBackground(rand);
+    this.repaintLayers(rand);
+  }
+
+  private resetLogs() {
     this.changes.clear();
     this.stains.clear();
-    this.stainCtx.clearRect(0, 0, W, H);
-    this.paintBackground(rand);
+    this.paintSeq = this.stainSeq = this.changes.seq;
+    this.paintStale = false;
+    this.stainCtx.clearRect(0, 0, this.width, this.height);
+    this.stainChunks.fill(0);
+  }
 
+  /** Paints the ground, rock and liquid layers from the material grid. */
+  private repaintLayers(rand: () => number) {
+    const W = this.width;
+    const H = this.height;
     const ground = this.groundCtx.createImageData(W, H);
     const rock = this.rockCtx.createImageData(W, H);
-    const acid = this.acidCtx.createImageData(W, H);
     const liquid = this.liquidCtx.createImageData(W, H);
-
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const m = this.materials[y * W + x];
         if (m === AIR) continue;
         const p = (y * W + x) * 4;
         if (m === ROCK) this.paintRock(rock.data, p, x, y, rand);
-        else this.paintPixel(m, x, y, rand, ground.data, acid.data, liquid.data, p);
+        else this.paintPixel(m, x, y, rand, ground.data, liquid.data, p);
       }
     }
     this.groundCtx.putImageData(ground, 0, 0);
     this.rockCtx.putImageData(rock, 0, 0);
-    this.acidCtx.putImageData(acid, 0, 0);
     this.liquidCtx.putImageData(liquid, 0, 0);
+  }
+
+  /** Repaints the ground & liquid layers of a rectangle (rock never changes). */
+  private repaintRect(x0: number, y0: number, x1: number, y1: number) {
+    const W = this.width;
+    // Surfaces are painted lighter: the pixels just below a change may need it too
+    y1 = Math.min(this.height - 1, y1 + 3);
+    x0 = Math.max(0, x0);
+    y0 = Math.max(0, y0);
+    x1 = Math.min(W - 1, x1);
+    const w = x1 - x0 + 1;
+    const h = y1 - y0 + 1;
+    if (w <= 0 || h <= 0) return;
+    const ground = this.groundCtx.getImageData(x0, y0, w, h);
+    const liquid = this.liquidCtx.getImageData(x0, y0, w, h);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const p = ((y - y0) * w + (x - x0)) * 4;
+        const mat = this.materials[y * W + x];
+        if (mat === ROCK) continue;
+        ground.data[p + 3] = liquid.data[p + 3] = 0;
+        if (mat !== AIR) this.paintPixel(mat, x, y, Math.random, ground.data, liquid.data, p);
+      }
+    }
+    this.groundCtx.putImageData(ground, x0, y0);
+    this.liquidCtx.putImageData(liquid, x0, y0);
+  }
+
+  /** Blood disappears with the pixels it was on (cells of the rect that are not solid any more). */
+  private clearStainsIn(x0: number, y0: number, x1: number, y1: number) {
+    const W = this.width;
+    x0 = Math.max(0, x0);
+    y0 = Math.max(0, y0);
+    x1 = Math.min(W - 1, x1);
+    y1 = Math.min(this.height - 1, y1);
+    if (x1 < x0 || y1 < y0) return;
+    const cw = Math.ceil(W / CHUNK);
+    let any = false;
+    for (let cy = y0 >> 5; cy <= y1 >> 5 && !any; cy++) {
+      for (let cx = x0 >> 5; cx <= x1 >> 5; cx++) if (this.stainChunks[cy * cw + cx]) { any = true; break; }
+    }
+    if (!any) return;
+    const w = x1 - x0 + 1;
+    const img = this.stainCtx.getImageData(x0, y0, w, y1 - y0 + 1);
+    const d = img.data;
+    let cleared = false;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const a = ((y - y0) * w + (x - x0)) * 4 + 3;
+        if (d[a] !== 0 && FREE(this.materials[y * W + x])) {
+          d[a] = 0;
+          cleared = true;
+        }
+      }
+    }
+    if (!cleared) return;
+    this.stainCtx.putImageData(img, x0, y0);
+    this.stains.push({ x0, y0, x1, y1 });
+  }
+
+  /**
+   * Brings the picture up to date with the grid (once per frame, before drawing):
+   * blood on vanished pixels is wiped, and — only if the 2D renderer is drawing —
+   * the changed rectangles of its layers are repainted.
+   */
+  public flushRender(paint2D: boolean) {
+    const W = this.width;
+    const H = this.height;
+    const seq = this.changes.seq;
+    if (this.stainSeq !== seq) {
+      const rects = this.changes.listSince(this.stainSeq, 4);
+      if (rects === 'all') this.clearStainsIn(0, 0, W - 1, H - 1);
+      else for (const r of rects) this.clearStainsIn(r.x0, r.y0, r.x1, r.y1);
+      this.stainSeq = seq;
+    }
+    if (!paint2D) {
+      if (this.paintSeq !== seq) this.paintStale = true;
+      this.paintSeq = seq;
+      return;
+    }
+    if (this.paintStale) {
+      this.paintStale = false;
+      this.paintSeq = seq;
+      this.repaintLayers(Math.random);
+      return;
+    }
+    if (this.paintSeq === seq) return;
+    const rects = this.changes.listSince(this.paintSeq, 4);
+    this.paintSeq = seq;
+    if (rects === 'all') this.repaintLayers(Math.random);
+    else for (const r of rects) this.repaintRect(r.x0, r.y0, r.x1, r.y1);
   }
 
   private airAbove(x: number, y: number, depth: number): boolean {
@@ -618,7 +654,7 @@ export class Terrain {
   }
 
   private paintPixel(m: number, x: number, y: number, rand: () => number,
-    ground: Uint8ClampedArray, acid: Uint8ClampedArray, liquid: Uint8ClampedArray, p: number) {
+    ground: Uint8ClampedArray, liquid: Uint8ClampedArray, p: number) {
     const n = rand() - 0.5;
     const t = this.theme;
     let c: RGB;
@@ -668,10 +704,19 @@ export class Terrain {
         c = rand() < 0.06 ? [255, 190, 70] : shade([118, 34, 28], n * 40 + ((x * 7 + y * 3) % 5 === 0 ? -25 : 0));
         break;
       }
-      case ACID:
-        target = acid;
-        c = [20, Math.floor(220 + n * 35), Math.floor(20 + n * 20)];
+      case OBSIDIAN: {
+        // Black volcanic glass with purple glints
+        const glint = (x * 5 + y * 3) % 13 === 0 ? 45 : 0;
+        c = shade([34, 24, 44], n * 18 + glint + (this.airAbove(x, y, 2) ? 18 : 0));
         break;
+      }
+      case ACID: {
+        target = liquid;
+        const surface = this.airAbove(x, y, 2);
+        c = surface ? [170, 255, 120] : [30, Math.floor(200 + n * 40), Math.floor(30 + n * 20)];
+        a = surface ? 235 : 200;
+        break;
+      }
       case WATER: {
         target = liquid;
         const surface = this.airAbove(x, y, 2);
@@ -869,18 +914,15 @@ export class Terrain {
     }
   }
 
-  /** Background, ground, rock and acid — drawn under the wizards. */
-  public draw(ctx: CanvasRenderingContext2D, time: number) {
+  /** Background, ground and rock — drawn under the wizards. */
+  public draw(ctx: CanvasRenderingContext2D) {
     ctx.drawImage(this.bgCanvas, 0, 0, this.width, this.height);
     ctx.drawImage(this.groundCanvas, 0, 0);
     ctx.drawImage(this.rockCanvas, 0, 0);
     ctx.drawImage(this.stainCanvas, 0, 0);
-    ctx.globalAlpha = 0.7 + Math.sin(time * 0.08) * 0.3;
-    ctx.drawImage(this.acidCanvas, 0, 0);
-    ctx.globalAlpha = 1;
   }
 
-  /** Water & lava — drawn over the wizards so they look submerged. */
+  /** Water, acid & lava — drawn over the wizards so they look submerged. */
   public drawLiquids(ctx: CanvasRenderingContext2D, time: number) {
     ctx.globalAlpha = 0.9 + Math.sin(time * 0.05) * 0.1;
     ctx.drawImage(this.liquidCanvas, 0, 0);
@@ -890,7 +932,7 @@ export class Terrain {
   /** Scaled-down picture of the whole map (lobby preview). */
   public drawPreview(ctx: CanvasRenderingContext2D, w: number, h: number) {
     ctx.imageSmoothingEnabled = true;
-    for (const layer of [this.bgCanvas, this.groundCanvas, this.rockCanvas, this.stainCanvas, this.acidCanvas, this.liquidCanvas]) {
+    for (const layer of [this.bgCanvas, this.groundCanvas, this.rockCanvas, this.stainCanvas, this.liquidCanvas]) {
       ctx.drawImage(layer, 0, 0, w, h);
     }
   }
@@ -909,9 +951,9 @@ export class ChangeLog {
 
   public push(r: Rect) {
     this.rects.push(r);
-    if (this.rects.length > 512) {
-      this.rects.splice(0, 256);
-      this.base += 256;
+    if (this.rects.length > 4096) {
+      this.rects.splice(0, 2048);
+      this.base += 2048;
     }
   }
 

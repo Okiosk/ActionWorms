@@ -56,6 +56,8 @@ interface PendingBlast { x: number; y: number; r: number; damage: number; owner:
 const LAVA_START = 1800;
 const LAVA_STEP_TICKS = 180;
 const LAVA_STEP_PX = 4;
+/** Every second, the host sends a fingerprint of its terrain so clients can check they still agree */
+const FLUID_CHECK_TICKS = 60;
 /** Destroyed crystal pixels per gold coin (a cluster ≈ 100 px ≈ 20 gold) */
 const CRYSTAL_PIXELS_PER_GOLD = 5;
 const randomSeed = () => Math.floor(Math.random() * 1_000_000) + 1;
@@ -88,6 +90,13 @@ export class Game implements ProjectileWorld {
   private inputSeq = 0;
   private inputHistory: { seq: number; input: WormInput }[] = [];
   private pendingStates: StateMessage[] = [];
+  /** Tick of the flowing materials (lockstep: +1 per host tick, carried by every STATE) */
+  private fluidTick = 0;
+  /** Client: asked the host for its terrain, waiting for it */
+  private resyncAsked = false;
+  /** Host: last terrain snapshot sent to each client (rate limit) */
+  private resyncSent = new Map<string, number>();
+  private lastSizzle = 0;
 
   // Host → clients event queue
   private pendingEvents: NetEvent[] = [];
@@ -158,16 +167,6 @@ export class Game implements ProjectileWorld {
     WORLD_ENV.gravityAt = (x, y) => {
       for (const z of this.zones) if ((x - z.x) ** 2 + (y - z.y) ** 2 < ZONE_RADIUS * ZONE_RADIUS) return -0.7;
       return 1;
-    };
-    // Collapsing sand raises a cloud of dust
-    this.terrain.onSandFall = (x0, y0, x1, y1) => {
-      const n = Math.min(40, Math.round((x1 - x0 + 1) * (y1 - y0 + 1) / 60));
-      for (let i = 0; i < n; i++) {
-        const x = x0 + Math.random() * (x1 - x0);
-        const y = y0 + Math.random() * (y1 - y0);
-        if (Math.random() < 0.5) this.particles.spawn(x, y, (Math.random() - 0.5) * 0.4, 0.6 + Math.random(), 'dirt', '#d9b97a', 1.2, 30);
-        else this.particles.spawn(x, y, (Math.random() - 0.5) * 0.3, -0.1, 'smoke', '#c8a978', 6, 40);
-      }
     };
   }
 
@@ -354,6 +353,9 @@ export class Game implements ProjectileWorld {
     this.wind = 0;
     WORLD_ENV.wind = 0;
     this.matchTicks = 0;
+    this.fluidTick = 0;
+    this.resyncAsked = false;
+    this.resyncSent.clear();
     this.lavaLevel = this.terrain.height - 11;
     this.particles.clear();
     this.corpses = [];
@@ -478,6 +480,16 @@ export class Game implements ProjectileWorld {
       case 'SELECT_WEAPON':
         this.applyWeaponChoice(fromId, msg.weaponId);
         break;
+      case 'RESYNC': {
+        // A client's terrain drifted: send it ours (taken between two ticks, after the last STATE)
+        if (!this.isInMatch()) break;
+        const now = performance.now();
+        if (now - (this.resyncSent.get(fromId) ?? -1e9) < 2000) break;
+        this.resyncSent.set(fromId, now);
+        console.warn(`[fluids] resync requested by ${fromId} at tick ${this.fluidTick}`);
+        this.net.sendTo(fromId, { type: 'TERRAIN', terrain: this.terrain.encodeMaterials(), awake: this.terrain.fluids.getAwake(), ft: this.fluidTick });
+        break;
+      }
     }
   }
 
@@ -504,7 +516,9 @@ export class Game implements ProjectileWorld {
         type: 'START_MATCH',
         players: this.players,
         modifiers: this.modifiers,
-        terrain: this.terrain.encodeMaterials()
+        terrain: this.terrain.encodeMaterials(),
+        awake: this.terrain.fluids.getAwake(),
+        ft: this.fluidTick
       });
     }
     this.emitLobby();
@@ -527,13 +541,24 @@ export class Game implements ProjectileWorld {
         this.players = msg.players;
         this.modifiers = msg.modifiers;
         this.setupMatch();
-        if (msg.terrain) this.terrain.loadMaterials(new Uint8Array(msg.terrain));
+        if (msg.terrain) {
+          this.terrain.loadMaterials(new Uint8Array(msg.terrain), msg.awake ? new Uint8Array(msg.awake) : undefined);
+          this.fluidTick = msg.ft ?? 0;
+        }
         this.worms = this.players.map(p => this.createWorm(p));
         this.onMatchStart?.();
         this.openLocalShop();
         break;
       case 'STATE':
         if (this.isInMatch()) this.pendingStates.push(msg);
+        break;
+      case 'TERRAIN':
+        if (!this.isInMatch()) break;
+        // Every STATE up to the snapshot's tick arrived before it (ordered channel)
+        this.flushStates();
+        this.terrain.loadMaterials(new Uint8Array(msg.terrain), new Uint8Array(msg.awake));
+        this.fluidTick = msg.ft;
+        this.resyncAsked = false;
         break;
       case 'MATCH_OVER':
         this.flushStates();
@@ -672,7 +697,7 @@ export class Game implements ProjectileWorld {
           this.damageWorm(w, 4, 0, -0.6, 'lava', true);
           continue;
         }
-        if (t.isAcid(w.x, w.y + 6) || t.isAcid(w.x - 3, w.y + 6) || t.isAcid(w.x + 3, w.y + 6) ||
+        if (t.isAcid(w.x, w.y) || t.isAcid(w.x, w.y + 6) || t.isAcid(w.x - 3, w.y + 6) || t.isAcid(w.x + 3, w.y + 6) ||
             t.isAcid(w.x - 6, w.y) || t.isAcid(w.x + 6, w.y)) {
           this.particles.spawn(w.x + (Math.random() - 0.5) * 8, w.y + 4, (Math.random() - 0.5) * 0.5, -0.8, 'spark', '#44ff44', 1.5, 15);
           this.damageWorm(w, 3, 0, 0, 'acid', true);
@@ -699,7 +724,12 @@ export class Game implements ProjectileWorld {
     // 4. King of the hill
     if (mods.gameMode === 'koth' && this.phase === 'playing') this.updateKOTH();
 
-    // 5. Broadcast
+    // 5. Flowing materials: one step, after everything that changed the terrain this tick
+    this.fluidTick++;
+    this.terrain.stepFluids(this.fluidTick);
+    this.fluidFx();
+
+    // 6. Broadcast
     this.broadcastState();
   }
 
@@ -1500,7 +1530,9 @@ export class Game implements ProjectileWorld {
     });
 
     this.net.broadcast({ type: 'STATE', worms, projectiles, events: this.pendingEvents, teamScores: this.teamScores,
-      ...(this.wind !== 0 ? { wind: Math.round(this.wind * 1e4) / 1e4 } : {}) });
+      ...(this.wind !== 0 ? { wind: Math.round(this.wind * 1e4) / 1e4 } : {}),
+      ft: this.fluidTick,
+      ...(this.fluidTick % FLUID_CHECK_TICKS === 0 ? { th: this.terrain.fluidHash() } : {}) });
     this.pendingEvents = [];
   }
 
@@ -1514,8 +1546,70 @@ export class Game implements ProjectileWorld {
     this.pendingStates = [];
     for (const s of states) {
       for (const ev of s.events) this.applyEvent(ev);
+      this.stepFluids(s);
     }
     this.applyWorldState(states[states.length - 1]);
+  }
+
+  /**
+   * Client: the flowing materials advance exactly like on the host — one step per host tick,
+   * after that tick's events. The host's fingerprint tells whether we still agree.
+   */
+  private stepFluids(s: StateMessage) {
+    if (s.ft === undefined) return;
+    if (s.ft !== this.fluidTick + 1) this.askResync(`tick ${this.fluidTick} → ${s.ft}`);
+    this.fluidTick = s.ft;
+    this.terrain.stepFluids(s.ft);
+    this.fluidFx();
+    if (s.th !== undefined && !this.resyncAsked) {
+      const mine = this.terrain.fluidHash();
+      if (mine !== s.th) this.askResync(`hash ${mine} ≠ ${s.th} at tick ${s.ft}`);
+    }
+  }
+
+  private askResync(why: string) {
+    if (this.resyncAsked) return;
+    this.resyncAsked = true;
+    console.warn(`[fluids] terrain out of sync (${why}), asking the host`);
+    this.net.broadcast({ type: 'RESYNC' });
+  }
+
+  /** Steam, acid fumes, embers where the flowing materials reacted (visual only) */
+  private fluidFx() {
+    const r = this.terrain.fluids.reactions;
+    if (r.length === 0) return;
+    let steam = 0;
+    const p = this.particles;
+    for (let k = 0; k < r.length; k += 3) {
+      const x = r[k + 1];
+      const y = r[k + 2];
+      switch (r[k]) {
+        case 0: // lava + water → obsidian
+          steam++;
+          if (steam <= 12) {
+            p.spawn(x, y - 1, (Math.random() - 0.5) * 0.6, -0.4 - Math.random() * 0.5, 'smoke', '#e8eef2', 7 + Math.random() * 5, 50 + Math.random() * 30);
+            if (Math.random() < 0.4) p.spawn(x, y, (Math.random() - 0.5) * 1.2, -1 - Math.random(), 'spark', '#ffb060', 1.2, 14);
+          }
+          break;
+        case 1: // acid ate something
+          if (Math.random() < 0.6) p.spawn(x, y - 1, (Math.random() - 0.5) * 0.3, -0.35, 'smoke', '#9cff6a', 4, 30);
+          break;
+        case 2: // lava burns wood
+          p.spawn(x, y - 1, (Math.random() - 0.5) * 0.4, -0.7, 'fire', undefined, 5, 18);
+          break;
+        case 3: // lava melts ice
+          if (Math.random() < 0.5) p.spawn(x, y - 1, 0, -0.3, 'smoke', '#dfefff', 5, 30);
+          break;
+      }
+    }
+    r.length = 0;
+    if (steam > 0) {
+      const now = performance.now();
+      if (now - this.lastSizzle > 220) {
+        this.lastSizzle = now;
+        sound.playSizzle(steam);
+      }
+    }
   }
 
   private applyEvent(ev: NetEvent) {
@@ -1531,9 +1625,6 @@ export class Game implements ProjectileWorld {
         break;
       case 'boom':
         this.explosionFX(ev.x, ev.y, ev.r, ev.c, !!ev.f);
-        break;
-      case 'acid':
-        this.terrain.addAcid(ev.x, ev.y, ev.r);
         break;
       case 'blood':
         this.bloodFX(ev.x, ev.y, ev.n, ev.dx ?? 0, ev.dy ?? 0);
@@ -1794,6 +1885,7 @@ export class Game implements ProjectileWorld {
       this.smoothActive = false;
     }
     const smooth = this.smoothActive;
+    this.terrain.flushRender(!smooth);
     const view = { camX: this.camX - sx, camY: this.camY - sy, zoom: this.camZoom, time: this.frame };
 
     if (smooth) {
@@ -1812,7 +1904,7 @@ export class Game implements ProjectileWorld {
     ctx.scale(this.camZoom, this.camZoom);
     ctx.translate(-this.camX + sx, -this.camY + sy);
 
-    if (!smooth) this.terrain.draw(ctx, this.frame);
+    if (!smooth) this.terrain.draw(ctx);
     ctx.imageSmoothingEnabled = true; // painted sprites
     if (this.modifiers.gameMode === 'koth') this.drawKothZone(ctx);
     this.drawCorpses(ctx, now);
